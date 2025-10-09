@@ -1,5 +1,5 @@
 from openai import OpenAI
-from config.settings import Config
+from backend.config.settings import Config
 from datetime import datetime
 
 def debug_log(message: str, category: str = "general"):

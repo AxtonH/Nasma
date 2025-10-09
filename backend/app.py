@@ -1,15 +1,15 @@
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for, send_from_directory
 from flask_cors import CORS
-from services.chatgpt_service import ChatGPTService
-from services.odoo_service import OdooService
-from services.employee_service import EmployeeService
-from services.timeoff_service import TimeOffService
-from services.halfday_service import HalfDayLeaveService
-from services.session_manager import SessionManager
-from services.document_service import DocumentService
-from config.settings import Config
-from services.intent_service import IntentService
-from services.overtime_service import OvertimeService
+from backend.services.chatgpt_service import ChatGPTService
+from backend.services.odoo_service import OdooService
+from backend.services.employee_service import EmployeeService
+from backend.services.timeoff_service import TimeOffService
+from backend.services.halfday_service import HalfDayLeaveService
+from backend.services.session_manager import SessionManager
+from backend.services.document_service import DocumentService
+from backend.config.settings import Config
+from backend.services.intent_service import IntentService
+from backend.services.overtime_service import OvertimeService
 import os
 from datetime import date
 import time
@@ -111,7 +111,7 @@ def create_app():
     overtime_service = OvertimeService(odoo_service, employee_service, session_manager)
     
     # Import and initialize reimbursement service
-    from services.reimbursement_service import ReimbursementService
+    from backend.services.reimbursement_service import ReimbursementService
     reimbursement_service = ReimbursementService(odoo_service, employee_service)
     reimbursement_service.session_manager = session_manager
     

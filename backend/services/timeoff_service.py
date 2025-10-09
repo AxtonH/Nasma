@@ -3,7 +3,7 @@ import json
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 import re
-from config.settings import Config
+from backend.config.settings import Config
 
 def debug_log(message: str, category: str = "general"):
     """Conditional debug logging based on configuration"""
