@@ -507,6 +507,21 @@ Be thorough and informative while maintaining clarity and accuracy."""
         try:
             debug_log(f"Starting time-off flow check...", "bot_logic")
 
+            # Enforce single active flow per thread: block if another flow is active
+            try:
+                active_any = self.session_manager.get_active_session(thread_id) if thread_id else None
+                if active_any and active_any.get('type') not in (None, 'timeoff') and active_any.get('state') in ['started', 'active']:
+                    other = active_any.get('type', 'another')
+                    return {
+                        'message': f"You're currently in an active {other} request. Please complete it or type 'cancel' to end it before starting time off.",
+                        'thread_id': thread_id,
+                        'source': self.model,
+                        'confidence_score': 1.0,
+                        'session_handled': True
+                    }
+            except Exception:
+                pass
+
             # Check for active session using thread_id if provided
             active_session = None
             if thread_id:

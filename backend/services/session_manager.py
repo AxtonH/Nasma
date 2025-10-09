@@ -195,6 +195,23 @@ class SessionManager:
             
             print(f"DEBUG: SessionManager returning None for thread: {thread_id}")
             return None
+
+    def get_active_session(self, thread_id: str) -> Optional[Dict]:
+        """Return the active (started/active) session for this thread, or None."""
+        try:
+            s = self.get_session(thread_id)
+            if s and s.get('state') in ['started', 'active']:
+                return s
+            return None
+        except Exception:
+            return None
+
+    def get_active_flow_type(self, thread_id: str) -> Optional[str]:
+        """Return the type of the currently active flow for this thread, if any."""
+        s = self.get_active_session(thread_id)
+        if s:
+            return s.get('type')
+        return None
     
     def update_session(self, thread_id: str, updates: Dict) -> bool:
         """Update session data"""

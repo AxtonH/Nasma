@@ -227,7 +227,17 @@ class OvertimeService:
                 import time
                 thread_id = f"overtime_{int(time.time())}"
 
-            # Check active session first
+            # Enforce single active flow: block if another flow is active
+            active_any = self.session_manager.get_session(thread_id)
+            if active_any and active_any.get('state') in ['started', 'active'] and active_any.get('type') not in (None, 'overtime'):
+                other = active_any.get('type', 'another')
+                return {
+                    'message': f"You're currently in an active {other} request. Please complete it or type 'cancel' to end it before starting overtime.",
+                    'thread_id': thread_id,
+                    'session_handled': True
+                }
+
+            # Check active session first (overtime)
             active = self.session_manager.get_session(thread_id)
             if active and active.get('type') == 'overtime':
                 # If session is not active anymore, clear and do not intercept other flows
