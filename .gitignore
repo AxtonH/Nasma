@@ -1,0 +1,19 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment files (keep the committed .env template)
+.env.*
+!.env
+
+# OS / IDE artifacts
+.DS_Store
+thumbs.db
+*.swp
+.idea/
+.vscode/
+.claude/
