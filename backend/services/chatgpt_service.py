@@ -102,17 +102,45 @@ class ChatGPTService:
             if self.timeoff_service and self.session_manager:
                 try:
                     debug_log(f"Checking time-off flow for message: {message[:50]}...", "bot_logic")
-                    # If no active session for provided thread_id, but exactly one active timeoff
-                    # session exists (e.g., UI dropped thread_id), continue that one.
+                    # If no active session for provided thread_id, consider rebinding ONLY
+                    # when the user message looks like a continuation (dates/yes/no/1/2/3 etc.).
+                    def _looks_like_timeoff_continuation(txt: str) -> bool:
+                        try:
+                            s = (txt or '').strip().lower()
+                            if not s:
+                                return False
+                            # clear intents should NOT trigger rebind
+                            starters = ['time off', 'leave', 'annual leave', 'sick leave', 'request time off']
+                            if any(k in s for k in starters):
+                                return False
+                            # continuation tokens
+                            if s in {'yes','y','no','n','submit','confirm','cancel','stop','exit','quit'}:
+                                return True
+                            if any(tok in s for tok in ['hour_from=','hour_to=']):
+                                return True
+                            if any(k in s for k in ['annual','sick','custom hours']):
+                                return True
+                            # numeric choice (1,2,3)
+                            if s.isdigit() and len(s) <= 2:
+                                return True
+                            import re as _re
+                            if _re.search(r"\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?", s):
+                                return True
+                            if ' to ' in s or ' until ' in s or ' till ' in s or '-' in s:
+                                # likely a range
+                                return True
+                            return False
+                        except Exception:
+                            return False
+
                     try:
                         active_for_thread = self.session_manager.get_active_session(thread_id) if thread_id else None
                     except Exception:
                         active_for_thread = None
-                    if not active_for_thread:
+                    if not active_for_thread and _looks_like_timeoff_continuation(message):
                         try:
                             active_list = self.session_manager.find_active_timeoff_sessions()
                             if isinstance(active_list, list) and len(active_list) == 1:
-                                # Rebind to the existing active timeoff thread
                                 rebound_thread_id, rebound_session = active_list[0]
                                 thread_id = thread_id or rebound_thread_id
                                 debug_log(f"Rebinding to active time-off session thread: {thread_id}", "bot_logic")
@@ -911,6 +939,16 @@ Be thorough and informative while maintaining clarity and accuracy."""
             if step == 1:  # Waiting for leave type selection
                 return self._handle_leave_type_selection(message, thread_id, session, employee_data)
             elif step == 2:  # Waiting for date range (start and end in one message)
+                # Safety: if no leave type was selected (e.g., residue from a previous flow), reset to step 1
+                try:
+                    sd = session.get('data', {}) if isinstance(session, dict) else {}
+                    selected_type = sd.get('selected_leave_type') or session.get('selected_leave_type')
+                except Exception:
+                    selected_type = None
+                if not selected_type:
+                    debug_log("Step=2 but no selected_leave_type found; resetting to step 1", "bot_logic")
+                    self.session_manager.update_session(thread_id, {'step': 1})
+                    return self._handle_leave_type_selection(message, thread_id, session, employee_data)
                 return self._handle_date_range_input(message, thread_id, session, employee_data)
             elif step == 3:  # Waiting for confirmation
                 return self._handle_confirmation(message, thread_id, session, employee_data)
