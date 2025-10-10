@@ -44,6 +44,94 @@ class ChatGPTService:
         self.session_manager = session_manager
         self.halfday_service = halfday_service
         self.reimbursement_service = reimbursement_service
+
+    def _is_timeoff_start_message(self, text):
+        """Return True when the user explicitly asks to begin a fresh time-off flow."""
+        try:
+            phrase = (text or '').strip().lower()
+            if not phrase:
+                return False
+            blockers = {'cancel', 'stop', 'exit', 'quit', 'abort', 'undo', 'no', 'n', 'yes', 'y', 'confirm', 'submit', 'ok', 'sure'}
+            if any(tok in phrase for tok in blockers):
+                return False
+            keywords = ['time off', 'day off', 'leave', 'annual leave', 'sick leave', 'custom hours', 'vacation', 'holiday', 'rest day']
+            verbs = ['i want', 'i need', 'i would like', 'request', 'apply', 'book', 'submit', 'take', 'get', 'start', 'begin']
+            if any(k in phrase for k in keywords) and any(v in phrase for v in verbs):
+                return True
+            single_intents = {
+                'time off', 'annual leave', 'sick leave', 'custom hours',
+                'request time off', 'apply for leave', 'submit leave request'
+            }
+            return phrase in single_intents
+        except Exception:
+            return False
+
+    def _is_timeoff_continuation_message(self, text):
+        """Return True when the message looks like a reply within an existing time-off flow."""
+        try:
+            phrase = (text or '').strip().lower()
+            if not phrase:
+                return False
+            start_keywords = ['time off', 'leave', 'annual leave', 'sick leave', 'request time off']
+            if any(k in phrase for k in start_keywords):
+                return False
+            continuation_tokens = {
+                'yes', 'y', 'no', 'n', 'submit', 'confirm', 'cancel', 'stop',
+                'exit', 'quit', 'ok', 'sure'
+            }
+            if phrase in continuation_tokens:
+                return True
+            if any(tok in phrase for tok in ['hour_from=', 'hour_to=']):
+                return True
+            if any(term in phrase for term in ['annual', 'sick', 'custom hours', 'work from home']):
+                return True
+            if phrase.isdigit() and len(phrase) <= 2:
+                return True
+            import re as _re
+            if _re.search(r"\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?", phrase):
+                return True
+            if any(marker in phrase for marker in [' to ', ' until ', ' till ', '-', ' next ', ' tomorrow']):
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _reset_timeoff_sessions(self, thread_id, reason=''):
+        """Force-remove any lingering time-off sessions so a fresh flow can start."""
+        try:
+            if thread_id:
+                try:
+                    if reason:
+                        self.session_manager.cancel_session(thread_id, reason)
+                except Exception:
+                    pass
+                try:
+                    self.session_manager.clear_session(thread_id)
+                except Exception:
+                    pass
+            try:
+                for tid, sess in list(getattr(self.session_manager, 'sessions', {}).items()):
+                    if tid == thread_id:
+                        continue
+                    if isinstance(sess, dict) and sess.get('type') == 'timeoff':
+                        try:
+                            self.session_manager.clear_session(tid)
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+            try:
+                for tid, sess in self.session_manager.find_active_timeoff_sessions():
+                    if thread_id and tid == thread_id:
+                        continue
+                    try:
+                        self.session_manager.clear_session(tid)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        except Exception:
+            pass
     
     def _get_client(self):
         """Get OpenAI client, initializing lazily if needed"""
@@ -102,86 +190,23 @@ class ChatGPTService:
             if self.timeoff_service and self.session_manager:
                 try:
                     debug_log(f"Checking time-off flow for message: {message[:50]}...", "bot_logic")
-                    # Helper: detect a fresh-start phrase for time-off and force a clean slate
-                    def _looks_like_timeoff_start(txt: str) -> bool:
-                        try:
-                            s = (txt or '').strip().lower()
-                            if not s:
-                                return False
-                            starters = [
-                                'time off', 'day off', 'leave', 'annual leave', 'sick leave', 'custom hours',
-                                'vacation', 'holiday'
-                            ]
-                            verbs = ['i want', 'i need', 'i would like', 'request', 'apply', 'book', 'submit', 'take', 'get']
-                            # ignore confirmation tokens
-                            if any(t in s for t in ['cancel','yes','no','confirm','submit','ok','sure']):
-                                return False
-                            if any(k in s for k in starters) and any(v in s for v in verbs):
-                                return True
-                            if s in {'time off','annual leave','sick leave','custom hours'}:
-                                return True
-                            return False
-                        except Exception:
-                            return False
 
-                    # On fresh start: only clear and restart if there is NO active time-off session on this thread
-                    if _looks_like_timeoff_start(message):
+                    if self._is_timeoff_start_message(message):
+                        detected = (False, 0.0, {})
                         try:
-                            active_now = self.session_manager.get_active_session(thread_id) if thread_id else None
+                            detected = self.timeoff_service.detect_timeoff_intent(message)
                         except Exception:
-                            active_now = None
-                        if not active_now:
-                            try:
-                                if thread_id:
-                                    self.session_manager.clear_session(thread_id)
-                                # Also clear any in-memory timeoff sessions to avoid accidental rebinding
-                                for tid, sess in list(getattr(self.session_manager, 'sessions', {}).items()):
-                                    try:
-                                        if isinstance(sess, dict) and sess.get('type') == 'timeoff':
-                                            self.session_manager.clear_session(tid)
-                                    except Exception:
-                                        continue
-                            except Exception:
-                                pass
-                            debug_log("Fresh time-off start detected. Starting new session.", "bot_logic")
-                            return self._start_timeoff_session(message, thread_id, {}, employee_data)
-
-                    # If no active session for provided thread_id, consider rebinding ONLY
-                    # when the user message looks like a continuation (dates/yes/no/1/2/3 etc.).
-                    def _looks_like_timeoff_continuation(txt: str) -> bool:
-                        try:
-                            s = (txt or '').strip().lower()
-                            if not s:
-                                return False
-                            # clear intents should NOT trigger rebind
-                            starters = ['time off', 'leave', 'annual leave', 'sick leave', 'request time off']
-                            if any(k in s for k in starters):
-                                return False
-                            # continuation tokens
-                            if s in {'yes','y','no','n','submit','confirm','cancel','stop','exit','quit'}:
-                                return True
-                            if any(tok in s for tok in ['hour_from=','hour_to=']):
-                                return True
-                            if any(k in s for k in ['annual','sick','custom hours']):
-                                return True
-                            # numeric choice (1,2,3)
-                            if s.isdigit() and len(s) <= 2:
-                                return True
-                            import re as _re
-                            if _re.search(r"\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?", s):
-                                return True
-                            if ' to ' in s or ' until ' in s or ' till ' in s or '-' in s:
-                                # likely a range
-                                return True
-                            return False
-                        except Exception:
-                            return False
+                            detected = (False, 0.0, {})
+                        extracted_payload = detected[2] if detected[0] else {}
+                        self._reset_timeoff_sessions(thread_id, 'User requested new time-off flow')
+                        debug_log("Fresh time-off start detected. Starting new session.", "bot_logic")
+                        return self._start_timeoff_session(message, thread_id, extracted_payload, employee_data)
 
                     try:
                         active_for_thread = self.session_manager.get_active_session(thread_id) if thread_id else None
                     except Exception:
                         active_for_thread = None
-                    if not active_for_thread and _looks_like_timeoff_continuation(message):
+                    if not active_for_thread and self._is_timeoff_continuation_message(message):
                         try:
                             active_list = self.session_manager.find_active_timeoff_sessions()
                             if isinstance(active_list, list) and len(active_list) == 1:
@@ -621,6 +646,12 @@ Be thorough and informative while maintaining clarity and accuracy."""
             is_timeoff, confidence, extracted_data = self.timeoff_service.detect_timeoff_intent(message)
             debug_log(f"Time-off detection complete: is_timeoff={is_timeoff}, confidence={confidence}", "bot_logic")
 
+            # If the user explicitly restarts while a session exists, wipe and start fresh
+            if self._is_timeoff_start_message(message):
+                debug_log("Restart phrase detected during active flow; resetting session.", "bot_logic")
+                self._reset_timeoff_sessions(thread_id, 'User restarted time-off flow mid-session')
+                return self._start_timeoff_session(message, thread_id, extracted_data if is_timeoff else {}, employee_data)
+
             # If this is a new time-off request (high confidence)
             if is_timeoff and confidence >= 0.7:
                 # If there's already an active time-off session, continue it instead of restarting
@@ -977,6 +1008,19 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     'model_used': self.model
                 }
 
+            # Allow users to restart mid-flow with a fresh time-off request phrase
+            if self._is_timeoff_start_message(message):
+                debug_log("Restart phrase detected during continuation; resetting flow.", "bot_logic")
+                payload = {}
+                try:
+                    detected = self.timeoff_service.detect_timeoff_intent(message)
+                    if detected[0]:
+                        payload = detected[2] or {}
+                except Exception:
+                    payload = {}
+                self._reset_timeoff_sessions(thread_id, 'User restarted time-off flow during continuation')
+                return self._start_timeoff_session(message, thread_id, payload, employee_data)
+
             # If user responds with confirmation terms but we somehow remained on a previous step,
             # promote to confirmation as long as we have the required context.
             try:
@@ -1043,8 +1087,11 @@ Be thorough and informative while maintaining clarity and accuracy."""
         
         # Validate that we still have leave types
         if not leave_types:
-            debug_log("No leave types found in session data, cancelling session", "bot_logic")
-            self.session_manager.clear_session(thread_id)
+            debug_log("No leave types found in session data; forcing a fresh start.", "bot_logic")
+            self._reset_timeoff_sessions(thread_id, 'Missing leave types')
+            restarted = self._start_timeoff_session("time off", thread_id, {}, employee_data)
+            if restarted:
+                return restarted
             return {
                 'message': "I'm sorry, but I'm having trouble accessing the leave types. Please try requesting time off again or contact HR for assistance.",
                 'thread_id': thread_id,
