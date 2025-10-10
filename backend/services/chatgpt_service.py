@@ -1078,31 +1078,16 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 self._reset_timeoff_sessions(thread_id, 'User restarted time-off flow during continuation')
                 return self._start_timeoff_session(message, thread_id, payload, employee_data)
 
-            # Fast-path: confirmation keywords should move straight to submission when context exists
+            # Fast-path: confirmation keywords should move straight to submission only when at or after step 3 and context exists
             confirmation_tokens = {'yes', 'y', 'confirm', 'submit', 'ok', 'sure'}
             if message_lower in confirmation_tokens:
-                session_data_confirm = session.get('data', {}) if isinstance(session, dict) else {}
-                context_confirm = {}
-                if isinstance(session_data_confirm, dict):
-                    context_confirm = session_data_confirm.get('timeoff_context', {}) or {}
+                step_now = session.get('step', 1)
+                ctx = self._resolve_timeoff_context(session)
+                selected_type_confirm = ctx.get('selected_leave_type')
+                start_confirm = ctx.get('start_date')
+                end_confirm = ctx.get('end_date')
 
-                selected_type_confirm = (
-                    session.get('selected_leave_type')
-                    or (session_data_confirm.get('selected_leave_type') if isinstance(session_data_confirm, dict) else None)
-                    or context_confirm.get('selected_leave_type')
-                )
-                start_confirm = (
-                    session.get('start_date')
-                    or (session_data_confirm.get('start_date') if isinstance(session_data_confirm, dict) else None)
-                    or context_confirm.get('start_date')
-                )
-                end_confirm = (
-                    session.get('end_date')
-                    or (session_data_confirm.get('end_date') if isinstance(session_data_confirm, dict) else None)
-                    or context_confirm.get('end_date')
-                )
-
-                if start_confirm and end_confirm:
+                if step_now >= 3 and start_confirm and end_confirm and selected_type_confirm:
                     try:
                         self.session_manager.update_session(thread_id, {'step': 3})
                     except Exception:
@@ -1117,6 +1102,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
                         pass
                     return self._handle_confirmation(message, thread_id, session, employee_data)
 
+                # If confirmation comes too early, strictly enforce order
                 if not selected_type_confirm:
                     debug_log("Confirmation received but leave type missing; prompting user to reselect.", "bot_logic")
                     try:
@@ -1144,7 +1130,8 @@ Be thorough and informative while maintaining clarity and accuracy."""
             step = session.get('step', 1)
             debug_log(f"Continuing session at step {step} for thread {thread_id}", "bot_logic")
 
-            if step == 1:  # Waiting for leave type selection
+            # Enforce strict ordered steps: 1) leave type -> 2) dates -> 3) confirmation
+            if step <= 1:  # Waiting for leave type selection
                 return self._handle_leave_type_selection(message, thread_id, session, employee_data)
             elif step == 2:  # Waiting for date range (start and end in one message)
                 # Safety: if no leave type was selected (e.g., residue from a previous flow), reset to step 1
@@ -1158,7 +1145,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     self.session_manager.update_session(thread_id, {'step': 1})
                     return self._handle_leave_type_selection(message, thread_id, session, employee_data)
                 return self._handle_date_range_input(message, thread_id, session, employee_data)
-            elif step == 3:  # Waiting for confirmation
+            elif step >= 3:  # Waiting for confirmation
                 return self._handle_confirmation(message, thread_id, session, employee_data)
             else:
                 debug_log(f"Session in unknown state (step {step}), restarting", "bot_logic")
@@ -1623,7 +1610,23 @@ Be thorough and informative while maintaining clarity and accuracy."""
         message_lower = message.lower().strip()
         debug_log(f"Handling confirmation - message: '{message_lower}'", "bot_logic")
 
+        # Only allow final submission when step is 3 or greater and all fields exist
         if message_lower in ['yes', 'y', 'confirm', 'submit', 'ok', 'sure']:
+            try:
+                step_now = session.get('step', 1)
+                if step_now < 3:
+                    # Guard: push back to date step
+                    try:
+                        self.session_manager.update_session(thread_id, {'step': 2})
+                    except Exception:
+                        pass
+                    reprompt = (
+                        "I still need both the start and end date before I can submit the request. "
+                        "Please send them in one message, for example '15/10/2025 to 16/10/2025'."
+                    )
+                    return self._create_response_with_datepicker(reprompt, thread_id)
+            except Exception:
+                pass
             # Submit the request
             debug_log(f"User confirmed submission, calling _submit_timeoff_request", "bot_logic")
             return self._submit_timeoff_request(thread_id, session, employee_data)
@@ -2103,3 +2106,43 @@ Be thorough and informative while maintaining clarity and accuracy."""
             return float(val)
         except Exception:
             return float('nan')
+
+    # -------------------- Robust context helpers (time-off) --------------------
+    def _resolve_timeoff_context(self, session: dict) -> dict:
+        """Resolve time-off context fields from both root and nested session data.
+        Returns a dict with keys: selected_leave_type, start_date, end_date, employee_data.
+        """
+        try:
+            sd = session.get('data', {}) if isinstance(session, dict) else {}
+            ctx = sd.get('timeoff_context', {}) if isinstance(sd, dict) else {}
+            resolved = {
+                'selected_leave_type': (
+                    session.get('selected_leave_type')
+                    or sd.get('selected_leave_type')
+                    or ctx.get('selected_leave_type')
+                ),
+                'start_date': (
+                    session.get('start_date')
+                    or sd.get('start_date')
+                    or ctx.get('start_date')
+                ),
+                'end_date': (
+                    session.get('end_date')
+                    or sd.get('end_date')
+                    or ctx.get('end_date')
+                ),
+                'employee_data': (
+                    sd.get('employee_data')
+                    or ctx.get('employee_data')
+                    or session.get('employee_data')
+                    or {}
+                )
+            }
+            return resolved
+        except Exception:
+            return {
+                'selected_leave_type': None,
+                'start_date': None,
+                'end_date': None,
+                'employee_data': {}
+            }
