@@ -983,6 +983,15 @@ Be thorough and informative while maintaining clarity and accuracy."""
     def _continue_timeoff_session(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Continue an active time-off session"""
         try:
+            # Refresh the session snapshot to pick up any updates from previous steps
+            try:
+                if thread_id:
+                    refreshed_session = self.session_manager.get_session(thread_id)
+                    if refreshed_session:
+                        session = refreshed_session
+            except Exception:
+                pass
+
             # If session is already completed/cancelled, clear and do not continue
             try:
                 state = session.get('state')
@@ -1021,22 +1030,53 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 self._reset_timeoff_sessions(thread_id, 'User restarted time-off flow during continuation')
                 return self._start_timeoff_session(message, thread_id, payload, employee_data)
 
-            # If user responds with confirmation terms but we somehow remained on a previous step,
-            # promote to confirmation as long as we have the required context.
-            try:
-                sd_promote = session.get('data', {}) if isinstance(session, dict) else {}
-                has_type = bool(sd_promote.get('selected_leave_type') or session.get('selected_leave_type'))
-                start_present = sd_promote.get('start_date') or session.get('start_date')
-                end_present = sd_promote.get('end_date') or session.get('end_date')
-                if message_lower in ['yes', 'y', 'confirm', 'submit', 'ok', 'sure', 'no', 'n'] and has_type and start_present and end_present:
-                    # Ensure session step is 3
+            # Fast-path: confirmation keywords should move straight to submission when context exists
+            confirmation_tokens = {'yes', 'y', 'confirm', 'submit', 'ok', 'sure'}
+            if message_lower in confirmation_tokens:
+                session_data_confirm = session.get('data', {}) if isinstance(session, dict) else {}
+                selected_type_confirm = (session.get('selected_leave_type')
+                                         or session_data_confirm.get('selected_leave_type'))
+                start_confirm = session.get('start_date') or session_data_confirm.get('start_date')
+                end_confirm = session.get('end_date') or session_data_confirm.get('end_date')
+
+                if start_confirm and end_confirm:
                     try:
                         self.session_manager.update_session(thread_id, {'step': 3})
                     except Exception:
                         pass
+                    # Re-fetch once more so downstream logic sees the updated step/data
+                    try:
+                        if thread_id:
+                            refreshed_for_confirmation = self.session_manager.get_session(thread_id)
+                            if refreshed_for_confirmation:
+                                session = refreshed_for_confirmation
+                    except Exception:
+                        pass
                     return self._handle_confirmation(message, thread_id, session, employee_data)
-            except Exception:
-                pass
+
+                if not selected_type_confirm:
+                    debug_log("Confirmation received but leave type missing; prompting user to reselect.", "bot_logic")
+                    try:
+                        self.session_manager.update_session(thread_id, {'step': 1})
+                    except Exception:
+                        pass
+                    leave_types = session.get('main_leave_types') or session.get('leave_types', [])
+                    if leave_types:
+                        prompt = "I lost track of which leave type you picked. Please choose it again:"
+                        return self._create_response_with_buttons(prompt, thread_id, leave_types)
+                    prompt = "I lost track of which leave type you picked. Please let me know the leave type you need."
+                    return self._create_response(prompt, thread_id)
+
+                debug_log("Confirmation received but dates missing; requesting date range again.", "bot_logic")
+                try:
+                    self.session_manager.update_session(thread_id, {'step': 2})
+                except Exception:
+                    pass
+                reprompt = (
+                    "I still need both the start and end date before I can submit the request. "
+                    "Please send them in one message, for example '15/10/2025 to 16/10/2025'."
+                )
+                return self._create_response_with_datepicker(reprompt, thread_id)
 
             step = session.get('step', 1)
             debug_log(f"Continuing session at step {step} for thread {thread_id}", "bot_logic")
@@ -1252,6 +1292,15 @@ Be thorough and informative while maintaining clarity and accuracy."""
 
     def _handle_date_range_input(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Handle combined date range input (start and end in one message)"""
+        # Refresh session snapshot to capture any updates from previous steps
+        try:
+            if thread_id:
+                refreshed_session = self.session_manager.get_session(thread_id)
+                if refreshed_session:
+                    session = refreshed_session
+        except Exception:
+            pass
+
         # First, if the user typed confirmation terms here, jump to confirmation when context is ready
         try:
             ml = (message or '').strip().lower()
@@ -1411,6 +1460,15 @@ Be thorough and informative while maintaining clarity and accuracy."""
     
     def _handle_confirmation(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Handle final confirmation step"""
+        # Ensure we operate on the freshest session data (the handler might receive a stale snapshot)
+        try:
+            if thread_id:
+                refreshed_session = self.session_manager.get_session(thread_id)
+                if refreshed_session:
+                    session = refreshed_session
+        except Exception:
+            pass
+
         message_lower = message.lower().strip()
         debug_log(f"Handling confirmation - message: '{message_lower}'", "bot_logic")
 
