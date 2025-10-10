@@ -1161,6 +1161,23 @@ Be thorough and informative while maintaining clarity and accuracy."""
 
     def _handle_date_range_input(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Handle combined date range input (start and end in one message)"""
+        # First, if the user typed confirmation terms here, jump to confirmation when context is ready
+        try:
+            ml = (message or '').strip().lower()
+            if ml in {'yes','y','confirm','submit','ok','sure','no','n','cancel','abort','stop','exit','quit'}:
+                sd_cf = session.get('data', {}) if isinstance(session, dict) else {}
+                sel_type_cf = sd_cf.get('selected_leave_type') or session.get('selected_leave_type')
+                start_cf = sd_cf.get('start_date') or session.get('start_date')
+                end_cf = sd_cf.get('end_date') or session.get('end_date')
+                if sel_type_cf and start_cf and end_cf:
+                    try:
+                        self.session_manager.update_session(thread_id, {'step': 3})
+                    except Exception:
+                        pass
+                    return self._handle_confirmation(message, thread_id, session, employee_data)
+        except Exception:
+            pass
+
         # Detect if current flow is Half Days to enforce single-day constraint
         session_data_for_type = session.get('data', {})
         selected_type_for_validation = session_data_for_type.get('selected_leave_type') or session.get('selected_leave_type', {})
@@ -1176,8 +1193,11 @@ Be thorough and informative while maintaining clarity and accuracy."""
         # Accept widget format strictly first: "DD/MM/YYYY to DD/MM/YYYY"
         try:
             raw = (message or '').strip()
-            if raw.lower().startswith('reimbursement_expense_date='):
-                raw = raw.split('=', 1)[1].strip()
+            # Accept multiple widget keys
+            for key in ['reimbursement_expense_date=', 'embassy_date_range=', 'overtime_date_range=', 'timeoff_date_range=']:
+                if raw.lower().startswith(key):
+                    raw = raw.split('=', 1)[1].strip()
+                    break
             if ' to ' in raw and len(raw.split(' to ')) == 2:
                 a, b = [p.strip() for p in raw.split(' to ')]
                 from datetime import datetime as _dt
