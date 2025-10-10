@@ -933,6 +933,23 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     'model_used': self.model
                 }
 
+            # If user responds with confirmation terms but we somehow remained on a previous step,
+            # promote to confirmation as long as we have the required context.
+            try:
+                sd_promote = session.get('data', {}) if isinstance(session, dict) else {}
+                has_type = bool(sd_promote.get('selected_leave_type') or session.get('selected_leave_type'))
+                start_present = sd_promote.get('start_date') or session.get('start_date')
+                end_present = sd_promote.get('end_date') or session.get('end_date')
+                if message_lower in ['yes', 'y', 'confirm', 'submit', 'ok', 'sure', 'no', 'n'] and has_type and start_present and end_present:
+                    # Ensure session step is 3
+                    try:
+                        self.session_manager.update_session(thread_id, {'step': 3})
+                    except Exception:
+                        pass
+                    return self._handle_confirmation(message, thread_id, session, employee_data)
+            except Exception:
+                pass
+
             step = session.get('step', 1)
             debug_log(f"Continuing session at step {step} for thread {thread_id}", "bot_logic")
 
@@ -1155,6 +1172,45 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 )
         except Exception:
             is_halfday_flow = False
+
+        # Accept widget format strictly first: "DD/MM/YYYY to DD/MM/YYYY"
+        try:
+            raw = (message or '').strip()
+            if raw.lower().startswith('reimbursement_expense_date='):
+                raw = raw.split('=', 1)[1].strip()
+            if ' to ' in raw and len(raw.split(' to ')) == 2:
+                a, b = [p.strip() for p in raw.split(' to ')]
+                from datetime import datetime as _dt
+                for dt in (a, b):
+                    _dt.strptime(dt, '%d/%m/%Y')
+                # widget-provided format is valid; trust it and store
+                start_date = _dt.strptime(a, '%d/%m/%Y').strftime('%Y-%m-%d')
+                end_date = _dt.strptime(b, '%d/%m/%Y').strftime('%Y-%m-%d')
+                self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
+                self.session_manager.advance_session_step(thread_id)
+
+                session_data = session.get('data', {})
+                selected_type = session_data.get('selected_leave_type') or session.get('selected_leave_type', {})
+                resolved_employee = employee_data or session_data.get('employee_data') or session.get('employee_data') or {}
+
+                def dd_mm_yyyy(d: str) -> str:
+                    try:
+                        return _dt.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+                    except Exception:
+                        return d
+                response_text = f"Great, noted your dates. Here's your time-off request summary:\n\n"
+                response_text += f"📋 **Leave Type:** {selected_type.get('name', 'Unknown') if selected_type else 'Unknown'}\n"
+                response_text += f"📅 **Start Date:** {dd_mm_yyyy(start_date)}\n"
+                response_text += f"📅 **End Date:** {dd_mm_yyyy(end_date)}\n"
+                response_text += f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
+                response_text += "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
+                buttons = [
+                    {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
+                    {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
+                ]
+                return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
+        except Exception:
+            pass
 
         result = self.timeoff_service.parse_date_range(message)
         if result:
