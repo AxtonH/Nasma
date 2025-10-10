@@ -133,6 +133,19 @@ class ChatGPTService:
         except Exception:
             pass
 
+    def _restart_timeoff_flow(self, message: str, thread_id: str, employee_data: dict, reason: str = '') -> dict:
+        """Helper to force-reset and start a fresh time-off flow in the middle of another step."""
+        extracted_payload = {}
+        try:
+            detected = self.timeoff_service.detect_timeoff_intent(message)
+            if detected[0]:
+                extracted_payload = detected[2] or {}
+        except Exception:
+            extracted_payload = {}
+
+        self._reset_timeoff_sessions(thread_id, reason or 'User requested new time-off flow')
+        return self._start_timeoff_session(message, thread_id, extracted_payload, employee_data)
+
     def _persist_timeoff_context(self, thread_id: str, session: dict, **fields) -> None:
         """Persist important time-off context (leave type, dates, hours) for later steps."""
         if not thread_id or not fields:
@@ -778,9 +791,17 @@ Be thorough and informative while maintaining clarity and accuracy."""
             # Start session
             session_data = {
                 'extracted_data': extracted_data,
-                'employee_data': employee_data
+                'employee_data': employee_data,
+                'timeoff_context': {
+                    'employee_data': employee_data or {}
+                }
             }
             session = self.session_manager.start_session(thread_id, 'timeoff', session_data)
+
+            try:
+                self._persist_timeoff_context(thread_id, session, employee_data=employee_data or {})
+            except Exception:
+                pass
             
             # Get available leave types from Odoo
             debug_log(f"Fetching leave types for time-off session...", "bot_logic")
@@ -1155,6 +1176,10 @@ Be thorough and informative while maintaining clarity and accuracy."""
     
     def _handle_leave_type_selection(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Handle leave type selection step"""
+        if self._is_timeoff_start_message(message):
+            debug_log("Restart phrase detected during leave type selection; restarting flow.", "bot_logic")
+            return self._restart_timeoff_flow(message, thread_id, employee_data, 'User restarted during leave type selection')
+
         session_data = session.get('data', {})
         # Check for main leave types first (the 3 button options)
         leave_types = session_data.get('main_leave_types', [])
@@ -1278,6 +1303,10 @@ Be thorough and informative while maintaining clarity and accuracy."""
     
     def _handle_start_date_input(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Handle start date input step"""
+        if self._is_timeoff_start_message(message):
+            debug_log("Restart phrase detected during start date input; restarting flow.", "bot_logic")
+            return self._restart_timeoff_flow(message, thread_id, employee_data, 'User restarted during start date step')
+
         parsed_date = self.timeoff_service.parse_date_input(message)
         
         if parsed_date:
@@ -1293,6 +1322,10 @@ Be thorough and informative while maintaining clarity and accuracy."""
     
     def _handle_end_date_input(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Handle end date input step"""
+        if self._is_timeoff_start_message(message):
+            debug_log("Restart phrase detected during end date input; restarting flow.", "bot_logic")
+            return self._restart_timeoff_flow(message, thread_id, employee_data, 'User restarted during end date step')
+
         parsed_date = self.timeoff_service.parse_date_input(message)
         
         if parsed_date:
@@ -1361,6 +1394,10 @@ Be thorough and informative while maintaining clarity and accuracy."""
 
     def _handle_date_range_input(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Handle combined date range input (start and end in one message)"""
+        if self._is_timeoff_start_message(message):
+            debug_log("Restart phrase detected during date range input; restarting flow.", "bot_logic")
+            return self._restart_timeoff_flow(message, thread_id, employee_data, 'User restarted during date range step')
+
         # Refresh session snapshot to capture any updates from previous steps
         try:
             if thread_id:
