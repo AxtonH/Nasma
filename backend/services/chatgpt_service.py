@@ -1078,17 +1078,17 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 self._reset_timeoff_sessions(thread_id, 'User restarted time-off flow during continuation')
                 return self._start_timeoff_session(message, thread_id, payload, employee_data)
 
-            # Fast-path: confirmation keywords should move straight to submission only when at or after step 3 and context exists
+            # Fast-path: confirmation keywords should move straight to submission when context exists
             confirmation_tokens = {'yes', 'y', 'confirm', 'submit', 'ok', 'sure'}
             if message_lower in confirmation_tokens:
-                step_now = session.get('step', 1)
                 ctx = self._resolve_timeoff_context(session)
                 selected_type_confirm = ctx.get('selected_leave_type')
                 start_confirm = ctx.get('start_date')
                 end_confirm = ctx.get('end_date')
 
-                if step_now >= 3 and start_confirm and end_confirm and selected_type_confirm:
+                if selected_type_confirm and start_confirm and end_confirm:
                     try:
+                        # Ensure we are at confirmation step
                         self.session_manager.update_session(thread_id, {'step': 3})
                     except Exception:
                         pass
@@ -1370,6 +1370,21 @@ Be thorough and informative while maintaining clarity and accuracy."""
             pass
 
         # Still no match - provide helpful guidance
+        # Prefer showing the three primary options again instead of dumping the full list
+        try:
+            primary_names = ['Annual Leave', 'Sick Leave', 'Custom Hours']
+            primary = []
+            for nm in primary_names:
+                for lt in leave_types:
+                    if lt.get('name') == nm:
+                        primary.append(lt)
+                        break
+            if primary:
+                msg = "I didn't quite catch that. Please choose one of the leave types below:"
+                return self._create_response_with_buttons(msg, thread_id, primary)
+        except Exception:
+            pass
+        # Fallback to formatted list only if we cannot find the primary set
         leave_types_text = self.timeoff_service.format_leave_types_for_user(leave_types)
         response_text = f"I didn't quite catch that. Please select from the available options:\n\n{leave_types_text}\nYou can type the number (1, 2, 3, etc.) or the name of the leave type (like 'annual' or 'sick')."
         return self._create_response(response_text, thread_id)
