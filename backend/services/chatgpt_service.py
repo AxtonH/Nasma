@@ -102,6 +102,45 @@ class ChatGPTService:
             if self.timeoff_service and self.session_manager:
                 try:
                     debug_log(f"Checking time-off flow for message: {message[:50]}...", "bot_logic")
+                    # Helper: detect a fresh-start phrase for time-off and force a clean slate
+                    def _looks_like_timeoff_start(txt: str) -> bool:
+                        try:
+                            s = (txt or '').strip().lower()
+                            if not s:
+                                return False
+                            starters = [
+                                'time off', 'day off', 'leave', 'annual leave', 'sick leave', 'custom hours',
+                                'vacation', 'holiday'
+                            ]
+                            verbs = ['i want', 'i need', 'i would like', 'request', 'apply', 'book', 'submit', 'take', 'get']
+                            # ignore confirmation tokens
+                            if any(t in s for t in ['cancel','yes','no','confirm','submit','ok','sure']):
+                                return False
+                            if any(k in s for k in starters) and any(v in s for v in verbs):
+                                return True
+                            if s in {'time off','annual leave','sick leave','custom hours'}:
+                                return True
+                            return False
+                        except Exception:
+                            return False
+
+                    # On fresh start: clear any lingering time-off sessions and start anew from type selection
+                    if _looks_like_timeoff_start(message):
+                        try:
+                            if thread_id:
+                                self.session_manager.clear_session(thread_id)
+                            # Also clear any in-memory timeoff sessions to avoid accidental rebinding
+                            for tid, sess in list(getattr(self.session_manager, 'sessions', {}).items()):
+                                try:
+                                    if isinstance(sess, dict) and sess.get('type') == 'timeoff':
+                                        self.session_manager.clear_session(tid)
+                                except Exception:
+                                    continue
+                        except Exception:
+                            pass
+                        debug_log("Fresh time-off start detected. Starting new session.", "bot_logic")
+                        return self._start_timeoff_session(message, thread_id, {}, employee_data)
+
                     # If no active session for provided thread_id, consider rebinding ONLY
                     # when the user message looks like a continuation (dates/yes/no/1/2/3 etc.).
                     def _looks_like_timeoff_continuation(txt: str) -> bool:
