@@ -132,6 +132,31 @@ class ChatGPTService:
                 pass
         except Exception:
             pass
+
+    def _persist_timeoff_context(self, thread_id: str, session: dict, **fields) -> None:
+        """Persist important time-off context (leave type, dates, hours) for later steps."""
+        if not thread_id or not fields:
+            return
+
+        try:
+            existing_data = {}
+            if isinstance(session, dict):
+                existing_data = session.get('data', {}) or {}
+
+            context = dict(existing_data.get('timeoff_context', {}))
+            for key, value in fields.items():
+                if value is not None:
+                    context[key] = value
+
+            update_payload = {}
+            for key, value in fields.items():
+                if value is not None:
+                    update_payload[key] = value
+
+            update_payload['data'] = {**existing_data, 'timeoff_context': context}
+            self.session_manager.update_session(thread_id, update_payload)
+        except Exception as persist_error:
+            debug_log(f"Failed to persist time-off context: {persist_error}", "general")
     
     def _get_client(self):
         """Get OpenAI client, initializing lazily if needed"""
@@ -882,6 +907,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     if matched_type:
                         debug_log(f"Matched leave type: {matched_type['name']}", "bot_logic")
                         self.session_manager.update_session(thread_id, {'selected_leave_type': matched_type})
+                        self._persist_timeoff_context(thread_id, session, selected_leave_type=matched_type)
                         self.session_manager.advance_session_step(thread_id, {'leave_type_confirmed': True})
 
                         # If both dates are already present, move straight to confirmation
@@ -889,6 +915,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
                             start_date = self.timeoff_service.parse_date_input(extracted_data['start_date']) or extracted_data['start_date']
                             end_date = self.timeoff_service.parse_date_input(extracted_data['end_date']) or extracted_data['end_date']
                             self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
+                            self._persist_timeoff_context(thread_id, session, start_date=start_date, end_date=end_date)
                             self.session_manager.advance_session_step(thread_id)
 
                             def dd_slash_mm_yyyy(d: str) -> str:
@@ -1034,10 +1061,25 @@ Be thorough and informative while maintaining clarity and accuracy."""
             confirmation_tokens = {'yes', 'y', 'confirm', 'submit', 'ok', 'sure'}
             if message_lower in confirmation_tokens:
                 session_data_confirm = session.get('data', {}) if isinstance(session, dict) else {}
-                selected_type_confirm = (session.get('selected_leave_type')
-                                         or session_data_confirm.get('selected_leave_type'))
-                start_confirm = session.get('start_date') or session_data_confirm.get('start_date')
-                end_confirm = session.get('end_date') or session_data_confirm.get('end_date')
+                context_confirm = {}
+                if isinstance(session_data_confirm, dict):
+                    context_confirm = session_data_confirm.get('timeoff_context', {}) or {}
+
+                selected_type_confirm = (
+                    session.get('selected_leave_type')
+                    or (session_data_confirm.get('selected_leave_type') if isinstance(session_data_confirm, dict) else None)
+                    or context_confirm.get('selected_leave_type')
+                )
+                start_confirm = (
+                    session.get('start_date')
+                    or (session_data_confirm.get('start_date') if isinstance(session_data_confirm, dict) else None)
+                    or context_confirm.get('start_date')
+                )
+                end_confirm = (
+                    session.get('end_date')
+                    or (session_data_confirm.get('end_date') if isinstance(session_data_confirm, dict) else None)
+                    or context_confirm.get('end_date')
+                )
 
                 if start_confirm and end_confirm:
                     try:
@@ -1148,6 +1190,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
             if 1 <= choice_num <= len(leave_types):
                 selected_type = leave_types[choice_num - 1]
                 self.session_manager.update_session(thread_id, {'selected_leave_type': selected_type})
+                self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type)
                 self.session_manager.advance_session_step(thread_id)
                 
                 response_text = f"Great! You've selected {selected_type['name']}. \n\nYou can pick dates from the calendar below or type them. Examples:\n- 23/9 to 24/9\n- 23/09/2025 to 24/09/2025\n- 23-9-2025 till 24-9-2025\n- 23rd of September till the 24th\n- next Monday to Wednesday\n\nDefaults: I assume DD/MM, current month and year unless you specify otherwise."
@@ -1182,6 +1225,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
         # If we found a good match, use it
         if best_match and best_score > 0:
             self.session_manager.update_session(thread_id, {'selected_leave_type': best_match})
+            self._persist_timeoff_context(thread_id, session, selected_leave_type=best_match)
             self.session_manager.advance_session_step(thread_id)
             
             # If Half Days, show single-date picker; else show range picker
@@ -1238,6 +1282,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
         
         if parsed_date:
             self.session_manager.update_session(thread_id, {'start_date': parsed_date})
+            self._persist_timeoff_context(thread_id, session, start_date=parsed_date)
             self.session_manager.advance_session_step(thread_id)
             
             response_text = f"Got it! Start date: {parsed_date}\n\nWhat's your end date? Please use DD/MM/YYYY format."
@@ -1252,11 +1297,28 @@ Be thorough and informative while maintaining clarity and accuracy."""
         
         if parsed_date:
             session_data = session.get('data', {})
+            context_data = {}
+            if isinstance(session_data, dict):
+                context_data = session_data.get('timeoff_context', {}) or {}
             # Check both locations for start_date and selected_leave_type
-            start_date = session_data.get('start_date') or session.get('start_date')
-            selected_type = session_data.get('selected_leave_type') or session.get('selected_leave_type', {})
+            start_date = (
+                session_data.get('start_date')
+                or session.get('start_date')
+                or context_data.get('start_date')
+            )
+            selected_type = (
+                session_data.get('selected_leave_type')
+                or session.get('selected_leave_type', {})
+                or context_data.get('selected_leave_type')
+            )
             # Robustly resolve employee data from argument or session
-            resolved_employee = employee_data or session_data.get('employee_data') or session.get('employee_data') or {}
+            resolved_employee = (
+                employee_data
+                or session_data.get('employee_data')
+                or context_data.get('employee_data')
+                or session.get('employee_data')
+                or {}
+            )
             
             debug_log(f"End date processing - start_date: {start_date}, selected_type: {selected_type.get('name', 'None') if selected_type else 'None'}", "bot_logic")
             
@@ -1266,6 +1328,13 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 return self._create_response(response_text, thread_id)
             
             self.session_manager.update_session(thread_id, {'end_date': parsed_date})
+            self._persist_timeoff_context(
+                thread_id,
+                session,
+                start_date=start_date,
+                end_date=parsed_date,
+                selected_leave_type=selected_type
+            )
             self.session_manager.advance_session_step(thread_id)
             
             # Show confirmation (display dates as DD/MM/YYYY)
@@ -1350,8 +1419,23 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 self.session_manager.advance_session_step(thread_id)
 
                 session_data = session.get('data', {})
-                selected_type = session_data.get('selected_leave_type') or session.get('selected_leave_type', {})
-                resolved_employee = employee_data or session_data.get('employee_data') or session.get('employee_data') or {}
+                context_data = {}
+                if isinstance(session_data, dict):
+                    context_data = session_data.get('timeoff_context', {}) or {}
+                selected_type = (
+                    session_data.get('selected_leave_type')
+                    or session.get('selected_leave_type', {})
+                    or context_data.get('selected_leave_type')
+                    or {}
+                )
+                resolved_employee = (
+                    employee_data
+                    or session_data.get('employee_data')
+                    or context_data.get('employee_data')
+                    or session.get('employee_data')
+                    or {}
+                )
+                self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type, start_date=start_date, end_date=end_date)
 
                 def dd_mm_yyyy(d: str) -> str:
                     try:
@@ -1386,8 +1470,23 @@ Be thorough and informative while maintaining clarity and accuracy."""
             self.session_manager.advance_session_step(thread_id)
 
             session_data = session.get('data', {})
-            selected_type = session_data.get('selected_leave_type') or session.get('selected_leave_type', {})
-            resolved_employee = employee_data or session_data.get('employee_data') or session.get('employee_data') or {}
+            context_data = {}
+            if isinstance(session_data, dict):
+                context_data = session_data.get('timeoff_context', {}) or {}
+            selected_type = (
+                session_data.get('selected_leave_type')
+                or session.get('selected_leave_type', {})
+                or context_data.get('selected_leave_type')
+                or {}
+            )
+            resolved_employee = (
+                employee_data
+                or session_data.get('employee_data')
+                or context_data.get('employee_data')
+                or session.get('employee_data')
+                or {}
+            )
+            self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type, start_date=start_date, end_date=end_date)
 
             # Display dates as DD/MM/YYYY
             def dd_mm_yyyy(d: str) -> str:
@@ -1421,8 +1520,23 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 self.session_manager.advance_session_step(thread_id)
 
                 session_data = session.get('data', {})
-                selected_type = session_data.get('selected_leave_type') or session.get('selected_leave_type', {})
-                resolved_employee = employee_data or session_data.get('employee_data') or session.get('employee_data') or {}
+                context_data = {}
+                if isinstance(session_data, dict):
+                    context_data = session_data.get('timeoff_context', {}) or {}
+                selected_type = (
+                    session_data.get('selected_leave_type')
+                    or session.get('selected_leave_type', {})
+                    or context_data.get('selected_leave_type')
+                    or {}
+                )
+                resolved_employee = (
+                    employee_data
+                    or session_data.get('employee_data')
+                    or context_data.get('employee_data')
+                    or session.get('employee_data')
+                    or {}
+                )
+                self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type, start_date=single, end_date=single)
 
                 def dd_mm_yyyy(d: str) -> str:
                     try:
@@ -1501,12 +1615,36 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     raw_to = _get_param('hour_to', message) if has_structured else parsed_to
 
                     session_data = session.get('data', {})
-                    self.session_manager.update_session(thread_id, {'hour_from': raw_from, 'hour_to': raw_to})
+                    context_data = {}
+                    if isinstance(session_data, dict):
+                        context_data = session_data.get('timeoff_context', {}) or {}
 
-                    selected_type = session_data.get('selected_leave_type') or session.get('selected_leave_type', {})
-                    start_date = session_data.get('start_date') or session.get('start_date')
-                    end_date = session_data.get('end_date') or session.get('end_date')
-                    resolved_employee = employee_data or session_data.get('employee_data') or session.get('employee_data') or {}
+                    self.session_manager.update_session(thread_id, {'hour_from': raw_from, 'hour_to': raw_to})
+                    self._persist_timeoff_context(thread_id, session, hour_from=raw_from, hour_to=raw_to)
+
+                    selected_type = (
+                        session_data.get('selected_leave_type')
+                        or session.get('selected_leave_type', {})
+                        or context_data.get('selected_leave_type')
+                        or {}
+                    )
+                    start_date = (
+                        session_data.get('start_date')
+                        or session.get('start_date')
+                        or context_data.get('start_date')
+                    )
+                    end_date = (
+                        session_data.get('end_date')
+                        or session.get('end_date')
+                        or context_data.get('end_date')
+                    )
+                    resolved_employee = (
+                        employee_data
+                        or session_data.get('employee_data')
+                        or context_data.get('employee_data')
+                        or session.get('employee_data')
+                        or {}
+                    )
 
                     def dd_mm_yyyy(d: str) -> str:
                         try:
@@ -1562,12 +1700,35 @@ Be thorough and informative while maintaining clarity and accuracy."""
             debug_log(f"Full session structure: {session}", "bot_logic")
 
             session_data = session.get('data', {})
+            context_data = {}
+            if isinstance(session_data, dict):
+                context_data = session_data.get('timeoff_context', {}) or {}
+
             # Check both session root level and nested data level
-            selected_type = session_data.get('selected_leave_type') or session.get('selected_leave_type', {})
-            start_date = session_data.get('start_date') or session.get('start_date')
-            end_date = session_data.get('end_date') or session.get('end_date')
+            selected_type = (
+                session_data.get('selected_leave_type')
+                or session.get('selected_leave_type', {})
+                or context_data.get('selected_leave_type')
+                or {}
+            )
+            start_date = (
+                session_data.get('start_date')
+                or session.get('start_date')
+                or context_data.get('start_date')
+            )
+            end_date = (
+                session_data.get('end_date')
+                or session.get('end_date')
+                or context_data.get('end_date')
+            )
             # Resolve employee data from argument or session to ensure correctness
-            resolved_employee = employee_data or session_data.get('employee_data') or session.get('employee_data') or {}
+            resolved_employee = (
+                employee_data
+                or session_data.get('employee_data')
+                or context_data.get('employee_data')
+                or session.get('employee_data')
+                or {}
+            )
 
             debug_log(f"Session data - selected_type: {selected_type}, start_date: {start_date}, end_date: {end_date}", "bot_logic")
 
@@ -1593,8 +1754,8 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     debug_log(f"HalfDay build_submission error: {hd_map_e}", "general")
                 # Add hour range if present in session
                 sd = session.get('data', {})
-                hour_from = sd.get('hour_from') or session.get('hour_from')
-                hour_to = sd.get('hour_to') or session.get('hour_to')
+                hour_from = sd.get('hour_from') or session.get('hour_from') or context_data.get('hour_from')
+                hour_to = sd.get('hour_to') or session.get('hour_to') or context_data.get('hour_to')
 
                 # Enforce 4-hour maximum
                 try:
