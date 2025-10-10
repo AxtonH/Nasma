@@ -124,22 +124,27 @@ class ChatGPTService:
                         except Exception:
                             return False
 
-                    # On fresh start: clear any lingering time-off sessions and start anew from type selection
+                    # On fresh start: only clear and restart if there is NO active time-off session on this thread
                     if _looks_like_timeoff_start(message):
                         try:
-                            if thread_id:
-                                self.session_manager.clear_session(thread_id)
-                            # Also clear any in-memory timeoff sessions to avoid accidental rebinding
-                            for tid, sess in list(getattr(self.session_manager, 'sessions', {}).items()):
-                                try:
-                                    if isinstance(sess, dict) and sess.get('type') == 'timeoff':
-                                        self.session_manager.clear_session(tid)
-                                except Exception:
-                                    continue
+                            active_now = self.session_manager.get_active_session(thread_id) if thread_id else None
                         except Exception:
-                            pass
-                        debug_log("Fresh time-off start detected. Starting new session.", "bot_logic")
-                        return self._start_timeoff_session(message, thread_id, {}, employee_data)
+                            active_now = None
+                        if not active_now:
+                            try:
+                                if thread_id:
+                                    self.session_manager.clear_session(thread_id)
+                                # Also clear any in-memory timeoff sessions to avoid accidental rebinding
+                                for tid, sess in list(getattr(self.session_manager, 'sessions', {}).items()):
+                                    try:
+                                        if isinstance(sess, dict) and sess.get('type') == 'timeoff':
+                                            self.session_manager.clear_session(tid)
+                                    except Exception:
+                                        continue
+                            except Exception:
+                                pass
+                            debug_log("Fresh time-off start detected. Starting new session.", "bot_logic")
+                            return self._start_timeoff_session(message, thread_id, {}, employee_data)
 
                     # If no active session for provided thread_id, consider rebinding ONLY
                     # when the user message looks like a continuation (dates/yes/no/1/2/3 etc.).
