@@ -1201,10 +1201,52 @@ Be thorough and informative while maintaining clarity and accuracy."""
             choice_num = int(message_clean)
             if 1 <= choice_num <= len(leave_types):
                 selected_type = leave_types[choice_num - 1]
+                # If dates already exist (e.g., after reselect on confirmation), jump directly to confirmation
+                ctx = self._resolve_timeoff_context(session)
+                existing_start = ctx.get('start_date')
+                existing_end = ctx.get('end_date')
+                if existing_start and existing_end:
+                    try:
+                        self.session_manager.update_session(
+                            thread_id,
+                            {
+                                'selected_leave_type': selected_type,
+                                'start_date': existing_start,
+                                'end_date': existing_end,
+                                'step': 3
+                            }
+                        )
+                    except Exception:
+                        pass
+                    self._persist_timeoff_context(
+                        thread_id,
+                        session,
+                        selected_leave_type=selected_type,
+                        start_date=existing_start,
+                        end_date=existing_end
+                    )
+                    def _fmt(d: str) -> str:
+                        try:
+                            return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+                        except Exception:
+                            return d
+                    response_text = (
+                        "Perfect! Here's your time-off request summary:\n\n"
+                        f"📋 **Leave Type:** {selected_type.get('name', 'Unknown')}\n"
+                        f"📅 **Start Date:** {_fmt(existing_start)}\n"
+                        f"📅 **End Date:** {_fmt(existing_end)}\n"
+                        f"👤 **Employee:** {(employee_data or {}).get('name', 'Unknown')}\n\n"
+                        "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
+                    )
+                    buttons = [
+                        {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
+                        {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
+                    ]
+                    return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
+                # Otherwise, proceed to date collection
                 self.session_manager.update_session(thread_id, {'selected_leave_type': selected_type})
                 self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type)
                 self.session_manager.advance_session_step(thread_id)
-                
                 response_text = f"Great! You've selected {selected_type['name']}. \n\nYou can pick dates from the calendar below or type them. Examples:\n- 23/9 to 24/9\n- 23/09/2025 to 24/09/2025\n- 23-9-2025 till 24-9-2025\n- 23rd of September till the 24th\n- next Monday to Wednesday\n\nDefaults: I assume DD/MM, current month and year unless you specify otherwise."
                 return self._create_response_with_datepicker(response_text, thread_id)
         except ValueError:
@@ -1236,6 +1278,50 @@ Be thorough and informative while maintaining clarity and accuracy."""
         
         # If we found a good match, use it
         if best_match and best_score > 0:
+            # If dates already exist (e.g., after reselect on confirmation), jump directly to confirmation
+            ctx = self._resolve_timeoff_context(session)
+            existing_start = ctx.get('start_date')
+            existing_end = ctx.get('end_date')
+            if existing_start and existing_end:
+                try:
+                    self.session_manager.update_session(
+                        thread_id,
+                        {
+                            'selected_leave_type': best_match,
+                            'start_date': existing_start,
+                            'end_date': existing_end,
+                            'step': 3
+                        }
+                    )
+                except Exception:
+                    pass
+                self._persist_timeoff_context(
+                    thread_id,
+                    session,
+                    selected_leave_type=best_match,
+                    start_date=existing_start,
+                    end_date=existing_end
+                )
+                def _fmt(d: str) -> str:
+                    try:
+                        return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+                    except Exception:
+                        return d
+                response_text = (
+                    "Perfect! Here's your time-off request summary:\n\n"
+                    f"📋 **Leave Type:** {best_match.get('name', 'Unknown')}\n"
+                    f"📅 **Start Date:** {_fmt(existing_start)}\n"
+                    f"📅 **End Date:** {_fmt(existing_end)}\n"
+                    f"👤 **Employee:** {(employee_data or {}).get('name', 'Unknown')}\n\n"
+                    "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
+                )
+                buttons = [
+                    {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
+                    {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
+                ]
+                return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
+
+            # Otherwise, proceed to collect dates
             self.session_manager.update_session(thread_id, {'selected_leave_type': best_match})
             self._persist_timeoff_context(thread_id, session, selected_leave_type=best_match)
             self.session_manager.advance_session_step(thread_id)
