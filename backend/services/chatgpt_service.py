@@ -880,6 +880,14 @@ Be thorough and informative while maintaining clarity and accuracy."""
     def _continue_timeoff_session(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Continue an active time-off session"""
         try:
+            # If session is already completed/cancelled, clear and do not continue
+            try:
+                state = session.get('state')
+                if state in ['completed', 'cancelled']:
+                    self.session_manager.clear_session(thread_id)
+                    return None
+            except Exception:
+                pass
             # Check for exit commands
             message_lower = message.lower().strip()
             if message_lower in ['cancel', 'exit', 'stop', 'quit', 'nevermind', 'no thanks', 'end', 'abort', 'undo', 'no', 'n']:
@@ -1365,14 +1373,29 @@ Be thorough and informative while maintaining clarity and accuracy."""
             
             if success:
                 self.session_manager.complete_session(thread_id, {'submitted': True, 'result': result})
+                # Immediately clear session so a new flow can start right away
+                try:
+                    self.session_manager.clear_session(thread_id)
+                except Exception:
+                    pass
                 response_text = f"✅ **Success!** {result.get('message', 'Your time-off request has been submitted.')}\n\n"
                 response_text += "Your request is now pending approval from your manager. You should receive a notification once it's reviewed."
             else:
                 self.session_manager.complete_session(thread_id, {'submitted': False, 'error': result})
+                try:
+                    self.session_manager.clear_session(thread_id)
+                except Exception:
+                    pass
                 response_text = f"❌ **Submission Failed:** {result}\n\n"
                 response_text += "Please try again later or contact your HR department for assistance."
             
-            return self._create_response(response_text, thread_id)
+            resp = self._create_response(response_text, thread_id)
+            try:
+                # Mark as handled to avoid any lingering prompts
+                resp['session_handled'] = True
+            except Exception:
+                pass
+            return resp
             
         except Exception as e:
             debug_log(f"Error submitting time-off request: {e}", "general")
