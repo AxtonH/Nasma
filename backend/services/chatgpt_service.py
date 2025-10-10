@@ -102,6 +102,23 @@ class ChatGPTService:
             if self.timeoff_service and self.session_manager:
                 try:
                     debug_log(f"Checking time-off flow for message: {message[:50]}...", "bot_logic")
+                    # If no active session for provided thread_id, but exactly one active timeoff
+                    # session exists (e.g., UI dropped thread_id), continue that one.
+                    try:
+                        active_for_thread = self.session_manager.get_active_session(thread_id) if thread_id else None
+                    except Exception:
+                        active_for_thread = None
+                    if not active_for_thread:
+                        try:
+                            active_list = self.session_manager.find_active_timeoff_sessions()
+                            if isinstance(active_list, list) and len(active_list) == 1:
+                                # Rebind to the existing active timeoff thread
+                                rebound_thread_id, rebound_session = active_list[0]
+                                thread_id = thread_id or rebound_thread_id
+                                debug_log(f"Rebinding to active time-off session thread: {thread_id}", "bot_logic")
+                        except Exception:
+                            pass
+
                     timeoff_response = self._handle_timeoff_flow(message, thread_id, employee_data)
                     if timeoff_response:
                         debug_log(f"Time-off flow handled, returning response", "bot_logic")
@@ -1003,7 +1020,20 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 )
                 return self._create_response_with_datepicker(response_text, thread_id)
         
-        # No match found - provide helpful guidance
+        # No match found - before falling back, check if the user already provided dates.
+        try:
+            # If the message looks like a date range or a single date, treat it as step 2 input.
+            dr = self.timeoff_service.parse_date_range(message)
+            if dr:
+                return self._handle_date_range_input(message, thread_id, session, employee_data)
+            single = self.timeoff_service.parse_date_input(message)
+            if single:
+                # Treat as same-day range
+                return self._handle_date_range_input(message, thread_id, session, employee_data)
+        except Exception:
+            pass
+
+        # Still no match - provide helpful guidance
         leave_types_text = self.timeoff_service.format_leave_types_for_user(leave_types)
         response_text = f"I didn't quite catch that. Please select from the available options:\n\n{leave_types_text}\nYou can type the number (1, 2, 3, etc.) or the name of the leave type (like 'annual' or 'sick')."
         return self._create_response(response_text, thread_id)
