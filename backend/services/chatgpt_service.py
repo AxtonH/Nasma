@@ -244,6 +244,7 @@ class ChatGPTService:
                         active_for_thread = self.session_manager.get_active_session(thread_id) if thread_id else None
                     except Exception:
                         active_for_thread = None
+                    # Do NOT rebind across threads to avoid state leakage between flows
                     if not active_for_thread and self._is_timeoff_continuation_message(message):
                         try:
                             active_list = self.session_manager.find_active_timeoff_sessions()
@@ -785,8 +786,11 @@ Be thorough and informative while maintaining clarity and accuracy."""
             
             debug_log(f"Starting time-off session with thread_id: {thread_id}", "bot_logic")
             
-            # Clear any existing session first to prevent conflicts
-            self.session_manager.clear_session(thread_id)
+            # Clear any existing session + summary first to prevent conflicts
+            try:
+                self._reset_timeoff_flow_state(thread_id)
+            except Exception:
+                self.session_manager.clear_session(thread_id)
             
             # Start session
             session_data = {
@@ -1056,7 +1060,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     self.session_manager.cancel_session(thread_id, f"User requested to exit time-off flow with: {message_lower}")
                 finally:
                     # Clear any persisted state to avoid sticky sessions
-                    self.session_manager.clear_session(thread_id)
+                    self._reset_timeoff_flow_state(thread_id)
                 return {
                     'message': 'request cancelled, can i help you with anything else',
                     'thread_id': thread_id,
@@ -1737,7 +1741,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
             try:
                 self.session_manager.cancel_session(thread_id, 'User cancelled at confirmation')
             finally:
-                self.session_manager.clear_session(thread_id)
+                self._reset_timeoff_flow_state(thread_id)
             response_text = 'request cancelled, can i help you with anything else'
             return self._create_response(response_text, thread_id)
         else:
@@ -1938,9 +1942,9 @@ Be thorough and informative while maintaining clarity and accuracy."""
             
             if success:
                 self.session_manager.complete_session(thread_id, {'submitted': True, 'result': result})
-                # Immediately clear session so a new flow can start right away
+                # Immediately clear all state so a new flow can start right away
                 try:
-                    self.session_manager.clear_session(thread_id)
+                    self._reset_timeoff_flow_state(thread_id)
                 except Exception:
                     pass
                 response_text = f"✅ **Success!** {result.get('message', 'Your time-off request has been submitted.')}\n\n"
@@ -1948,7 +1952,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
             else:
                 self.session_manager.complete_session(thread_id, {'submitted': False, 'error': result})
                 try:
-                    self.session_manager.clear_session(thread_id)
+                    self._reset_timeoff_flow_state(thread_id)
                 except Exception:
                     pass
                 response_text = f"❌ **Submission Failed:** {result}\n\n"
@@ -2247,3 +2251,31 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 'end_date': None,
                 'employee_data': {}
             }
+
+    # -------------------- Full reset helpers --------------------
+    def _clear_summary(self, thread_id: str) -> None:
+        try:
+            path = self._get_summary_file(thread_id)
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    def _reset_timeoff_flow_state(self, thread_id: str) -> None:
+        """Comprehensively reset any cached state for this thread after finish/cancel."""
+        try:
+            if thread_id:
+                try:
+                    self.session_manager.clear_session(thread_id)
+                except Exception:
+                    pass
+                try:
+                    self.clear_conversation_history(thread_id)
+                except Exception:
+                    pass
+                try:
+                    self._clear_summary(thread_id)
+                except Exception:
+                    pass
+        except Exception:
+            pass
