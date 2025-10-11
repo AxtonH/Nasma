@@ -124,8 +124,11 @@ def create_app():
     intent_service = IntentService()
     overtime_service = OvertimeService(odoo_service, employee_service, session_manager)
     
-    # Import and initialize reimbursement service
-    from services.reimbursement_service import ReimbursementService
+    # Import and initialize reimbursement service (support package/local)
+    try:
+        from .services.reimbursement_service import ReimbursementService
+    except Exception:
+        from services.reimbursement_service import ReimbursementService
     reimbursement_service = ReimbursementService(odoo_service, employee_service)
     reimbursement_service.session_manager = session_manager
     
