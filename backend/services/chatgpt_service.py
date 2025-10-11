@@ -147,7 +147,10 @@ class ChatGPTService:
         return self._start_timeoff_session(message, thread_id, extracted_payload, employee_data)
 
     def _persist_timeoff_context(self, thread_id: str, session: dict, **fields) -> None:
-        """Persist important time-off context (leave type, dates, hours) for later steps."""
+        """Persist important time-off context (leave type, dates, hours) for later steps).
+
+        Guard against overwriting previously captured values with empty strings or None.
+        """
         if not thread_id or not fields:
             return
 
@@ -158,11 +161,17 @@ class ChatGPTService:
 
             context = dict(existing_data.get('timeoff_context', {}))
             for key, value in fields.items():
+                # Skip empty-string values to avoid erasing prior state
+                if isinstance(value, str) and value.strip() == "":
+                    continue
                 if value is not None:
                     context[key] = value
 
             update_payload = {}
             for key, value in fields.items():
+                # Skip empty-string values to avoid erasing prior state
+                if isinstance(value, str) and value.strip() == "":
+                    continue
                 if value is not None:
                     update_payload[key] = value
 
@@ -1597,6 +1606,11 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 end_date = _dt.strptime(b, '%d/%m/%Y').strftime('%Y-%m-%d')
                 self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
                 self.session_manager.advance_session_step(thread_id)
+                try:
+                    # Explicitly set step to 3 to avoid regressions
+                    self.session_manager.update_session(thread_id, {'step': 3})
+                except Exception:
+                    pass
 
                 # Resolve selected type using robust resolver
                 ctx_resolved = self._resolve_timeoff_context(session)
@@ -1639,6 +1653,11 @@ Be thorough and informative while maintaining clarity and accuracy."""
             # Validate chronological order (already ensured) and store
             self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
             self.session_manager.advance_session_step(thread_id)
+            try:
+                # Explicitly set step to 3 to avoid regressions
+                self.session_manager.update_session(thread_id, {'step': 3})
+            except Exception:
+                pass
 
             session_data = session.get('data', {})
             context_data = {}
@@ -1689,6 +1708,11 @@ Be thorough and informative while maintaining clarity and accuracy."""
             if single:
                 self.session_manager.update_session(thread_id, {'start_date': single, 'end_date': single})
                 self.session_manager.advance_session_step(thread_id)
+                try:
+                    # Explicitly set step to 3 to avoid regressions
+                    self.session_manager.update_session(thread_id, {'step': 3})
+                except Exception:
+                    pass
 
                 session_data = session.get('data', {})
                 context_data = {}
