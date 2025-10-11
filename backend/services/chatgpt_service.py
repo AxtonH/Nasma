@@ -1776,26 +1776,47 @@ Be thorough and informative while maintaining clarity and accuracy."""
         message_lower = message.lower().strip()
         debug_log(f"Handling confirmation - message: '{message_lower}'", "bot_logic")
 
-        # Only allow final submission when step is 3 or greater and all fields exist
+        # Confirm submit: ignore step number; rely on resolved context instead
         if message_lower in ['yes', 'y', 'confirm', 'submit', 'ok', 'sure']:
             try:
-                step_now = session.get('step', 1)
-                if step_now < 3:
-                    # Guard: push back to date step
-                    try:
-                        self.session_manager.update_session(thread_id, {'step': 2})
-                    except Exception:
-                        pass
-                    reprompt = (
-                        "I still need both the start and end date before I can submit the request. "
-                        "Please send them in one message, for example '15/10/2025 to 16/10/2025'."
-                    )
-                    return self._create_response_with_datepicker(reprompt, thread_id)
+                ctx_now = self._resolve_timeoff_context(session)
+            except Exception:
+                ctx_now = {'selected_leave_type': None, 'start_date': None, 'end_date': None}
+
+            sel_type_now = (ctx_now or {}).get('selected_leave_type')
+            start_now = (ctx_now or {}).get('start_date')
+            end_now = (ctx_now or {}).get('end_date')
+
+            if sel_type_now and start_now and end_now:
+                try:
+                    self.session_manager.update_session(thread_id, {'step': 3})
+                except Exception:
+                    pass
+                debug_log(f"User confirmed submission with full context present; submitting.", "bot_logic")
+                return self._submit_timeoff_request(thread_id, session, employee_data)
+
+            # Missing leave type
+            if not sel_type_now:
+                try:
+                    self.session_manager.update_session(thread_id, {'step': 1})
+                except Exception:
+                    pass
+                leave_types = session.get('main_leave_types') or session.get('leave_types', [])
+                if leave_types:
+                    prompt = "I lost track of which leave type you picked. Please choose it again:"
+                    return self._create_response_with_buttons(prompt, thread_id, leave_types)
+                return self._create_response("I lost track of which leave type you picked. Please tell me the leave type.", thread_id)
+
+            # Missing dates
+            try:
+                self.session_manager.update_session(thread_id, {'step': 2})
             except Exception:
                 pass
-            # Submit the request
-            debug_log(f"User confirmed submission, calling _submit_timeoff_request", "bot_logic")
-            return self._submit_timeoff_request(thread_id, session, employee_data)
+            reprompt = (
+                "I still need both the start and end date before I can submit the request. "
+                "Please send them in one message, for example '15/10/2025 to 16/10/2025'."
+            )
+            return self._create_response_with_datepicker(reprompt, thread_id)
         elif message_lower in ['no', 'n', 'cancel', 'abort', 'stop', 'exit', 'quit', 'nevermind', 'end', 'undo']:
             # Cancel the request with standardized message
             debug_log(f"User cancelled submission", "bot_logic")
