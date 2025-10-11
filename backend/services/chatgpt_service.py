@@ -54,14 +54,14 @@ class ChatGPTService:
             blockers = {'cancel', 'stop', 'exit', 'quit', 'abort', 'undo', 'no', 'n', 'yes', 'y', 'confirm', 'submit', 'ok', 'sure'}
             if any(tok in phrase for tok in blockers):
                 return False
-            keywords = ['time off', 'day off', 'leave', 'annual leave', 'sick leave', 'custom hours', 'vacation', 'holiday', 'rest day']
+            keywords = ['time off', 'day off', 'leave', 'vacation', 'holiday', 'rest day']
             verbs = ['i want', 'i need', 'i would like', 'request', 'apply', 'book', 'submit', 'take', 'get', 'start', 'begin']
+            # Require an explicit verb to treat as a fresh start; plain leave type names (e.g., 'annual leave')
+            # should be handled inside the flow as a selection, not as a restart trigger.
             if any(k in phrase for k in keywords) and any(v in phrase for v in verbs):
                 return True
-            single_intents = {
-                'time off', 'annual leave', 'sick leave', 'custom hours',
-                'request time off', 'apply for leave', 'submit leave request'
-            }
+            # Allow very short explicit starts only for generic phrases, not specific leave types
+            single_intents = {'time off', 'request time off', 'apply for leave', 'submit leave request'}
             return phrase in single_intents
         except Exception:
             return False
