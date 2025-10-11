@@ -1,15 +1,29 @@
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for, send_from_directory
 from flask_cors import CORS
-from services.chatgpt_service import ChatGPTService
-from services.odoo_service import OdooService
-from services.employee_service import EmployeeService
-from services.timeoff_service import TimeOffService
-from services.halfday_service import HalfDayLeaveService
-from services.session_manager import SessionManager
-from services.document_service import DocumentService
-from config.settings import Config
-from services.intent_service import IntentService
-from services.overtime_service import OvertimeService
+try:
+    # Production import style when running as package 'backend.app'
+    from .services.chatgpt_service import ChatGPTService
+    from .services.odoo_service import OdooService
+    from .services.employee_service import EmployeeService
+    from .services.timeoff_service import TimeOffService
+    from .services.halfday_service import HalfDayLeaveService
+    from .services.session_manager import SessionManager
+    from .services.document_service import DocumentService
+    from .config.settings import Config
+    from .services.intent_service import IntentService
+    from .services.overtime_service import OvertimeService
+except Exception:
+    # Local import style when running as script from backend/ directory
+    from services.chatgpt_service import ChatGPTService
+    from services.odoo_service import OdooService
+    from services.employee_service import EmployeeService
+    from services.timeoff_service import TimeOffService
+    from services.halfday_service import HalfDayLeaveService
+    from services.session_manager import SessionManager
+    from services.document_service import DocumentService
+    from config.settings import Config
+    from services.intent_service import IntentService
+    from services.overtime_service import OvertimeService
 import os
 from datetime import date
 import time
