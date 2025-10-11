@@ -3,7 +3,10 @@ import json
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 import logging
-from config.settings import Config
+try:
+    from ..config.settings import Config
+except Exception:
+    from config.settings import Config
 
 def debug_log(message: str, category: str = "general"):
     """Conditional debug logging based on configuration"""

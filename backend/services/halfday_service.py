@@ -4,7 +4,10 @@ from typing import List, Dict, Tuple, Optional
 def debug_log(message: str, category: str = "general"):
 
     try:
-        from config.settings import Config
+        try:
+            from ..config.settings import Config
+        except Exception:
+            from config.settings import Config
         if category == "odoo_data" and Config.DEBUG_ODOO_DATA:
             print(f"DEBUG: {message}")
         elif category == "bot_logic" and Config.DEBUG_BOT_LOGIC:

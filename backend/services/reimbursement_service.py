@@ -1,7 +1,10 @@
 from typing import Optional, Dict, Any, Tuple, List
 import re
 from datetime import datetime, date
-from config.settings import Config
+try:
+    from ..config.settings import Config
+except Exception:
+    from config.settings import Config
 
 def debug_log(message: str, category: str = "general"):
     """Conditional debug logging based on configuration"""

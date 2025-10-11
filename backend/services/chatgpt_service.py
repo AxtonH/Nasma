@@ -1,5 +1,10 @@
 from openai import OpenAI
-from config.settings import Config
+try:
+    # Production when imported as backend.services.chatgpt_service
+    from ..config.settings import Config
+except Exception:
+    # Local run from backend/ directory
+    from config.settings import Config
 from datetime import datetime
 
 def debug_log(message: str, category: str = "general"):
