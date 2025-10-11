@@ -2,7 +2,7 @@ import requests
 import json
 import time
 from typing import Dict, Optional, Tuple
-from backend.config.settings import Config
+from config.settings import Config
 
 class OdooService:
     """Service for Odoo API integration and authentication"""

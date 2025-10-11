@@ -1,7 +1,7 @@
 from typing import Optional, Dict, Any, Tuple, List
 import re
 from datetime import datetime, date
-from backend.config.settings import Config
+from config.settings import Config
 
 def debug_log(message: str, category: str = "general"):
     """Conditional debug logging based on configuration"""
