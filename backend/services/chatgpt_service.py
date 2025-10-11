@@ -702,21 +702,16 @@ Be thorough and informative while maintaining clarity and accuracy."""
 
             # If this is a new time-off request (high confidence)
             if is_timeoff and confidence >= 0.7:
-                # If there's already an active time-off session, continue it instead of restarting
-                if active_session and active_session.get('type') == 'timeoff' and active_session.get('state') in ['started', 'active']:
-                    debug_log(f"Active time-off session exists; continuing instead of restarting", "bot_logic")
-                    return self._continue_timeoff_session(message, thread_id, active_session, employee_data)
-
-                debug_log(f"High confidence time-off intent detected ({confidence:.2f}), starting fresh session...", "bot_logic")
-                # Clear any orphaned active sessions for this user to start fresh
-                if active_session:
-                    self.session_manager.clear_session(thread_id)
-                # Also clear any orphaned active sessions to prevent conflicts
-                active_sessions = self.session_manager.find_active_timeoff_sessions()
-                for orphaned_thread_id, orphaned_session in active_sessions:
-                    if orphaned_session.get('state') in ['started', 'active']:
-                        debug_log(f"Clearing orphaned session: {orphaned_thread_id}", "bot_logic")
-                        self.session_manager.clear_session(orphaned_thread_id)
+                # Always start a fresh time-off flow on explicit start phrases to avoid bleeding states
+                debug_log(f"High confidence time-off intent detected ({confidence:.2f}); forcing a clean start.", "bot_logic")
+                try:
+                    self._reset_timeoff_sessions(thread_id, 'New time-off request detected - force fresh session')
+                except Exception:
+                    try:
+                        if active_session:
+                            self.session_manager.clear_session(thread_id)
+                    except Exception:
+                        pass
                 # Validate that we have employee data before starting session
                 if not employee_data or not isinstance(employee_data, dict) or not employee_data.get('id'):
                     debug_log(f"Invalid employee data for time-off request: {employee_data}", "bot_logic")
