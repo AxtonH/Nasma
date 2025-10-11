@@ -1917,8 +1917,72 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 pass
 
             debug_log(f"Invalid confirmation response: '{message_lower}'", "bot_logic")
-            response_text = "Please reply with 'yes' to submit the request or 'no' to cancel."
-            return self._create_response(response_text, thread_id)
+            # Instead of a bare prompt, re-show a full confirmation summary when possible
+            try:
+                session_data = session.get('data', {})
+                context_data = {}
+                if isinstance(session_data, dict):
+                    context_data = session_data.get('timeoff_context', {}) or {}
+
+                selected_type = (
+                    session_data.get('selected_leave_type')
+                    or session.get('selected_leave_type', {})
+                    or context_data.get('selected_leave_type')
+                    or {}
+                )
+                start_date = (
+                    session_data.get('start_date')
+                    or session.get('start_date')
+                    or context_data.get('start_date')
+                )
+                end_date = (
+                    session_data.get('end_date')
+                    or session.get('end_date')
+                    or context_data.get('end_date')
+                )
+                resolved_employee = (
+                    employee_data
+                    or session_data.get('employee_data')
+                    or context_data.get('employee_data')
+                    or session.get('employee_data')
+                    or {}
+                )
+
+                if selected_type and start_date and end_date:
+                    def dd_mm_yyyy(d: str) -> str:
+                        try:
+                            return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+                        except Exception:
+                            return d
+                    response_text = f"Great, noted your dates. Here's your time-off request summary:\n\n"
+                    response_text += f"📋 **Leave Type:** {selected_type.get('name', 'Unknown')}\n"
+                    response_text += f"📅 **Start Date:** {dd_mm_yyyy(start_date)}\n"
+                    response_text += f"📅 **End Date:** {dd_mm_yyyy(end_date)}\n"
+                    response_text += f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
+                    response_text += "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
+                    buttons = [
+                        {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
+                        {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
+                    ]
+                    return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
+
+                # If we don't have enough context, direct the user to the next required step
+                if not selected_type:
+                    leave_types = session.get('main_leave_types') or session.get('leave_types', [])
+                    if leave_types:
+                        prompt = "I lost track of which leave type you picked. Please choose it again:"
+                        return self._create_response_with_buttons(prompt, thread_id, leave_types)
+                    return self._create_response("I lost track of which leave type you picked. Please tell me the leave type.", thread_id)
+
+                reprompt = (
+                    "I still need both the start and end date before I can submit the request. "
+                    "Please send them in one message, for example '15/10/2025 to 16/10/2025'."
+                )
+                return self._create_response_with_datepicker(reprompt, thread_id)
+            except Exception:
+                # Fallback minimal prompt only if summary rendering fails for some reason
+                response_text = "Please reply with 'yes' to submit the request or 'no' to cancel."
+                return self._create_response(response_text, thread_id)
     
     def _submit_timeoff_request(self, thread_id: str, session: dict, employee_data: dict) -> dict:
         """Submit the time-off request to Odoo"""
