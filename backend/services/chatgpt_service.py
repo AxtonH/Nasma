@@ -1827,8 +1827,109 @@ Be thorough and informative while maintaining clarity and accuracy."""
             response_text = 'request cancelled, can i help you with anything else'
             return self._create_response(response_text, thread_id)
         else:
-            # If we receive hour_from/hour_to structured message OR a natural hour range, capture and show summary
+            # Allow updating dates directly at confirmation: parse date range or single date
             try:
+                # 1) Date range like "DD/MM/YYYY to DD/MM/YYYY"
+                dr_conf = self.timeoff_service.parse_date_range(message)
+                if dr_conf:
+                    start_update, end_update = dr_conf
+                    self.session_manager.update_session(thread_id, {'start_date': start_update, 'end_date': end_update})
+                    # Persist in context
+                    try:
+                        ctx_now = self._resolve_timeoff_context(session)
+                        sel_type_now = (ctx_now or {}).get('selected_leave_type') or {}
+                    except Exception:
+                        sel_type_now = {}
+
+                    self._persist_timeoff_context(
+                        thread_id,
+                        session,
+                        selected_leave_type=sel_type_now,
+                        start_date=start_update,
+                        end_date=end_update
+                    )
+
+                    def dd_mm_yyyy(d: str) -> str:
+                        try:
+                            return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+                        except Exception:
+                            return d
+
+                    # Build confirmation summary with updated dates
+                    session_data = session.get('data', {})
+                    context_data = session_data.get('timeoff_context', {}) if isinstance(session_data, dict) else {}
+                    resolved_employee = (
+                        employee_data
+                        or session_data.get('employee_data')
+                        or context_data.get('employee_data')
+                        or session.get('employee_data')
+                        or {}
+                    )
+                    lt = sel_type_now.get('name', 'Unknown') if isinstance(sel_type_now, dict) else 'Unknown'
+                    response_text = (
+                        "Great, noted your dates. Here's your time-off request summary:\n\n"
+                        f"📋 **Leave Type:** {lt}\n"
+                        f"📅 **Start Date:** {dd_mm_yyyy(start_update)}\n"
+                        f"📅 **End Date:** {dd_mm_yyyy(end_update)}\n"
+                        f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
+                        "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
+                    )
+                    buttons = [
+                        {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
+                        {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
+                    ]
+                    return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
+
+                # 2) Single date: treat as same-day range
+                single_conf = self.timeoff_service.parse_date_input(message)
+                if single_conf:
+                    self.session_manager.update_session(thread_id, {'start_date': single_conf, 'end_date': single_conf})
+                    try:
+                        ctx_now = self._resolve_timeoff_context(session)
+                        sel_type_now = (ctx_now or {}).get('selected_leave_type') or {}
+                    except Exception:
+                        sel_type_now = {}
+
+                    self._persist_timeoff_context(
+                        thread_id,
+                        session,
+                        selected_leave_type=sel_type_now,
+                        start_date=single_conf,
+                        end_date=single_conf
+                    )
+
+                    def _dd_mm_yyyy(d: str) -> str:
+                        try:
+                            return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+                        except Exception:
+                            return d
+                    session_data = session.get('data', {})
+                    context_data = session_data.get('timeoff_context', {}) if isinstance(session_data, dict) else {}
+                    resolved_employee = (
+                        employee_data
+                        or session_data.get('employee_data')
+                        or context_data.get('employee_data')
+                        or session.get('employee_data')
+                        or {}
+                    )
+                    lt = sel_type_now.get('name', 'Unknown') if isinstance(sel_type_now, dict) else 'Unknown'
+                    response_text = (
+                        "Great, noted your date. Here's your time-off request summary:\n\n"
+                        f"📋 **Leave Type:** {lt}\n"
+                        f"📅 **Start Date:** { _dd_mm_yyyy(single_conf)}\n"
+                        f"📅 **End Date:** { _dd_mm_yyyy(single_conf)}\n"
+                        f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
+                        "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
+                    )
+                    buttons = [
+                        {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
+                        {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
+                    ]
+                    return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
+
+                # 3) If we receive hour_from/hour_to structured message OR a natural hour range, capture and show summary
+                # (existing behavior below)
+                
                 parsed_from, parsed_to = self._parse_hour_range_text(message)
                 has_structured = ('hour_from=' in message and 'hour_to=' in message)
                 if has_structured or (parsed_from and parsed_to):
