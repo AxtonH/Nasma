@@ -1200,6 +1200,20 @@ Be thorough and informative while maintaining clarity and accuracy."""
         
         message_clean = message.strip()
         
+        # Helper: primary types from session or filter
+        def _primary_types(all_types: list) -> list:
+            try:
+                names = ['Annual Leave', 'Sick Leave', 'Custom Hours']
+                result = []
+                for nm in names:
+                    for lt in all_types:
+                        if lt.get('name') == nm:
+                            result.append(lt)
+                            break
+                return result or all_types
+            except Exception:
+                return all_types
+
         # Check if user provided a number
         try:
             choice_num = int(message_clean)
@@ -1217,7 +1231,9 @@ Be thorough and informative while maintaining clarity and accuracy."""
                                 'selected_leave_type': selected_type,
                                 'start_date': existing_start,
                                 'end_date': existing_end,
-                                'step': 3
+                                'step': 3,
+                                # clear pendings
+                                'data': {**session.get('data', {}), 'pending_start_date': None, 'pending_end_date': None}
                             }
                         )
                     except Exception:
@@ -1294,7 +1310,8 @@ Be thorough and informative while maintaining clarity and accuracy."""
                             'selected_leave_type': best_match,
                             'start_date': existing_start,
                             'end_date': existing_end,
-                            'step': 3
+                            'step': 3,
+                            'data': {**session.get('data', {}), 'pending_start_date': None, 'pending_end_date': None}
                         }
                     )
                 except Exception:
@@ -1370,6 +1387,19 @@ Be thorough and informative while maintaining clarity and accuracy."""
             if single:
                 # Treat as same-day range
                 return self._handle_date_range_input(message, thread_id, session, employee_data)
+        except Exception:
+            pass
+
+        # Still no match - before guidance, if we already captured dates, move to confirmation path by asking for a type explicitly with buttons
+        try:
+            sd3 = session.get('data', {}) if isinstance(session, dict) else {}
+            ctx3 = self._resolve_timeoff_context(session)
+            start3 = ctx3.get('start_date') or sd3.get('pending_start_date')
+            end3 = ctx3.get('end_date') or sd3.get('pending_end_date')
+            if start3 and end3:
+                prim = _primary_types(leave_types)
+                msg3 = "I have your dates. Please choose a leave type to continue:"
+                return self._create_response_with_buttons(msg3, thread_id, prim)
         except Exception:
             pass
 
