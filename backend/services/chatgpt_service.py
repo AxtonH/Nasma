@@ -1516,6 +1516,22 @@ Be thorough and informative while maintaining clarity and accuracy."""
         except Exception:
             pass
 
+        # If the message has no date hints at all, just re-show the date picker without an error
+        try:
+            s_msg = (message or '').strip().lower()
+            import re as _re
+            has_digits = bool(_re.search(r"\d", s_msg))
+            has_connectors = any(t in s_msg for t in [' to ', ' until ', ' till ', '-', '–', '—'])
+            has_words = any(t in s_msg for t in ['tomorrow', 'today', 'next ', 'monday','tuesday','wednesday','thursday','friday','saturday','sunday'])
+            has_widget_key = 'timeoff_date_range=' in s_msg or 'embassy_date_range=' in s_msg or 'overtime_date_range=' in s_msg or 'reimbursement_expense_date=' in s_msg
+            if not (has_digits or has_connectors or has_words or has_widget_key):
+                guidance = (
+                    "Please send both dates in one message, for example '15/10/2025 to 16/10/2025'."
+                )
+                return self._create_response_with_datepicker(guidance, thread_id)
+        except Exception:
+            pass
+
         # Detect if current flow is Half Days to enforce single-day constraint
         session_data_for_type = session.get('data', {})
         selected_type_for_validation = session_data_for_type.get('selected_leave_type') or session.get('selected_leave_type', {})
@@ -1535,6 +1551,11 @@ Be thorough and informative while maintaining clarity and accuracy."""
             for key in ['reimbursement_expense_date=', 'embassy_date_range=', 'overtime_date_range=', 'timeoff_date_range=']:
                 if raw.lower().startswith(key):
                     raw = raw.split('=', 1)[1].strip()
+                    if not raw:
+                        # Empty widget payload: re-open picker without error
+                        return self._create_response_with_datepicker(
+                            "Please select a start and end date.", thread_id
+                        )
                     break
             if ' to ' in raw and len(raw.split(' to ')) == 2:
                 a, b = [p.strip() for p in raw.split(' to ')]
@@ -1547,21 +1568,12 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
                 self.session_manager.advance_session_step(thread_id)
 
-                session_data = session.get('data', {})
-                context_data = {}
-                if isinstance(session_data, dict):
-                    context_data = session_data.get('timeoff_context', {}) or {}
-                selected_type = (
-                    session_data.get('selected_leave_type')
-                    or session.get('selected_leave_type', {})
-                    or context_data.get('selected_leave_type')
-                    or {}
-                )
+                # Resolve selected type using robust resolver
+                ctx_resolved = self._resolve_timeoff_context(session)
+                selected_type = ctx_resolved.get('selected_leave_type') or {}
                 resolved_employee = (
                     employee_data
-                    or session_data.get('employee_data')
-                    or context_data.get('employee_data')
-                    or session.get('employee_data')
+                    or ctx_resolved.get('employee_data')
                     or {}
                 )
                 self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type, start_date=start_date, end_date=end_date)
