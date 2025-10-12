@@ -611,7 +611,8 @@ class EmployeeService:
             if not self.odoo_service.is_authenticated():
                 return False, "Not authenticated with Odoo"
 
-            size = 128 if size not in (128, 256, 512) else size
+            # Allow full-resolution image_1920 in addition to thumbnails
+            size = 128 if size not in (128, 256, 512, 1920) else size
             field_name = f"image_{size}"
 
             user_id = self.odoo_service.user_id

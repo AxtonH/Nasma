@@ -497,12 +497,8 @@ class DocumentService:
         os.makedirs(self.service_downloads_dir, exist_ok=True)
 
     def _read_employee_with_fields(self, employee_id: int, fields: list) -> Tuple[bool, Any]:
-        params = {
-            'args': [[employee_id]],
-            'kwargs': {'fields': fields}
-        }
-        # Reuse employee_service request machinery
-        return self.employee_service._make_odoo_request('hr.employee', 'read', params)
+        # Use safe employee read to gracefully handle field-level AccessError (drops forbidden fields)
+        return self.employee_service._safe_employee_read([employee_id], fields)
 
     def _read_company_with_fields(self, company_id: int, fields: list) -> Tuple[bool, Any]:
         params = {
@@ -579,7 +575,7 @@ class DocumentService:
             return False, 'Employee ID not found for current user'
 
         # Read required employee fields (ensures custom fields are fetched reliably)
-        emp_fields = ['name', 'gender', 'job_title', 'department_id', 'company_id', 'x_studio_joining_date', 'x_studio_work_location_country', 'x_studio_employee_arabic_name']
+        emp_fields = ['name', 'gender', 'x_studio_rf_gender', 'job_title', 'department_id', 'company_id', 'x_studio_joining_date', 'x_studio_work_location_country', 'x_studio_employee_arabic_name']
         ok, emp_read = self._read_employee_with_fields(employee_id, emp_fields)
         if not ok or not emp_read:
             return False, f'Failed to read employee fields: {emp_read}'
@@ -603,8 +599,11 @@ class DocumentService:
             return False, f'Failed to read company fields: {comp_read}'
         company = comp_read[0] if isinstance(comp_read, list) else comp_read
 
-        # Choose template based on gender and language
-        gender = (employee.get('gender') or '').strip().lower()
+        # Choose template based on gender and language, with fallback to custom rf gender
+        gender_raw = (employee.get('gender') or '').strip()
+        if not gender_raw:
+            gender_raw = str(employee.get('x_studio_rf_gender') or '').strip()
+        gender = gender_raw.lower()
         is_female = gender.startswith('f')
         if (lang or 'en').lower().startswith('ar'):
             template_path = self.template_ar_female if is_female else self.template_ar_male
@@ -714,7 +713,7 @@ class DocumentService:
             return False, 'Employee ID not found for current user'
 
         # Read required employee fields (extend if templates require more)
-        emp_fields = ['name', 'gender', 'job_title', 'department_id', 'company_id', 'x_studio_joining_date', 'x_studio_work_location_country', 'x_studio_employee_arabic_name']
+        emp_fields = ['name', 'gender', 'x_studio_rf_gender', 'job_title', 'department_id', 'company_id', 'x_studio_joining_date', 'x_studio_work_location_country', 'x_studio_employee_arabic_name']
         ok, emp_read = self._read_employee_with_fields(employee_id, emp_fields)
         if not ok or not emp_read:
             return False, f'Failed to read employee fields: {emp_read}'
@@ -737,8 +736,11 @@ class DocumentService:
             return False, f'Failed to read company fields: {comp_read}'
         company = comp_read[0] if isinstance(comp_read, list) else comp_read
 
-        # Choose template based on gender (English)
-        gender = (employee.get('gender') or '').strip().lower()
+        # Choose template based on gender (English) with fallback
+        gender_raw = (employee.get('gender') or '').strip()
+        if not gender_raw:
+            gender_raw = str(employee.get('x_studio_rf_gender') or '').strip()
+        gender = gender_raw.lower()
         is_female = gender.startswith('f')
         template_path = self.template_experience_female if is_female else self.template_experience_male
         if not os.path.exists(template_path):
@@ -788,7 +790,7 @@ class DocumentService:
             return False, 'Employee ID not found for current user'
 
         # Read required employee fields
-        emp_fields = ['name', 'gender', 'job_title', 'department_id', 'company_id', 'x_studio_joining_date', 'x_studio_work_location_country', 'x_studio_employee_arabic_name']
+        emp_fields = ['name', 'gender', 'x_studio_rf_gender', 'job_title', 'department_id', 'company_id', 'x_studio_joining_date', 'x_studio_work_location_country', 'x_studio_employee_arabic_name']
         ok, emp_read = self._read_employee_with_fields(employee_id, emp_fields)
         if not ok or not emp_read:
             return False, f'Failed to read employee fields: {emp_read}'
@@ -810,8 +812,11 @@ class DocumentService:
             return False, f'Failed to read company fields: {comp_read}'
         company = comp_read[0] if isinstance(comp_read, list) else comp_read
 
-        # Choose template by gender (English)
-        gender = (employee.get('gender') or '').strip().lower()
+        # Choose template by gender (English) with fallback
+        gender_raw = (employee.get('gender') or '').strip()
+        if not gender_raw:
+            gender_raw = str(employee.get('x_studio_rf_gender') or '').strip()
+        gender = gender_raw.lower()
         is_female = gender.startswith('f')
         template_path = self.template_embassy_female if is_female else self.template_embassy_male
         if not os.path.exists(template_path):
