@@ -137,14 +137,10 @@ class EmployeeService:
                     self._log(f"Result data: {result['result']}", "odoo_data")
                     return True, result['result']
                 else:
-                    # Normalize error shape
-                    err_obj = result.get('error')
-                    if err_obj and isinstance(err_obj, dict):
-                        error_msg = f"Odoo API error: {err_obj}"
-                    else:
-                        error_msg = f"Odoo API error: {result.get('error', 'Unknown error')}"
-                    self._log(f"{error_msg}", "odoo_data")
-                    return False, error_msg
+                    # Return raw error object so callers can inspect details
+                    err_obj = result.get('error', {'message': 'Unknown error'})
+                    self._log(f"Odoo API error: {err_obj}", "odoo_data")
+                    return False, err_obj
             else:
                 error_msg = f"HTTP error: {response.status_code}"
                 self._log(f"{error_msg}", "odoo_data")
@@ -173,24 +169,27 @@ class EmployeeService:
             if not text:
                 return forbidden
 
+            # Normalize Windows/Unix newlines
+            text = str(text).replace('\r\n', '\n')
+
             # Look for bullet list like "- field (allowed for groups ...)"
-            lines = str(text).splitlines()
+            lines = text.split('\n')
             for line in lines:
-                line = line.strip()
-                if line.startswith('- '):
-                    # Extract token between '- ' and first space/('(')
-                    # e.g. "- birthday (allowed for groups '...')"
-                    field = line[2:]
-                    # Trim trailing group clause
-                    paren = field.find(' ')
-                    if paren > 0:
-                        field = field[:paren]
-                    paren2 = field.find('(')
-                    if paren2 > 0:
-                        field = field[:paren2]
-                    field = field.strip().strip('-').strip()
-                    if field:
-                        forbidden.append(field)
+                s = line.strip()
+                if not s.startswith('- '):
+                    continue
+                # Extract the token after '- ' up to space or '(' or end
+                token = s[2:].strip()
+                cut = len(token)
+                for sep in [' (', ' ', '(']:
+                    idx = token.find(sep)
+                    if idx != -1:
+                        cut = min(cut, idx)
+                field = token[:cut].strip('-').strip()
+                # Basic sanity: only accept ascii letters, underscores and digits
+                import re
+                if field and re.match(r'^[a-zA-Z0-9_]+$', field):
+                    forbidden.append(field)
         except Exception:
             pass
         return forbidden
@@ -444,8 +443,8 @@ class EmployeeService:
                 self._log(f"Using cached employee data for user {user_id}", "bot_logic")
                 return True, cached_data
             
-            # Get available fields for this Odoo instance
-            available_fields = self._get_available_fields()
+            # Start with a conservative field set to avoid common AccessError fields
+            available_fields = self._get_safe_public_employee_fields()
             self._log(f"Available fields: {available_fields}", "odoo_data")
             
             # Fetch employee id first (lightweight), then read details by id to avoid heavy search_read payloads
