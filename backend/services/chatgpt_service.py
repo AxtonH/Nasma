@@ -674,33 +674,52 @@ Be thorough and informative while maintaining clarity and accuracy."""
         try:
             debug_log(f"Starting time-off flow check...", "bot_logic")
 
-            # Enforce single active flow per thread: block if another flow is active
-            try:
-                active_any = self.session_manager.get_active_session(thread_id) if thread_id else None
-                if active_any and active_any.get('type') not in (None, 'timeoff') and active_any.get('state') in ['started', 'active']:
-                    other = active_any.get('type', 'another')
-                    return {
-                        'message': f"You're currently in an active {other} request. Please complete it or type 'cancel' to end it before starting time off.",
-                        'thread_id': thread_id,
-                        'source': self.model,
-                        'confidence_score': 1.0,
-                        'session_handled': True
-                    }
-            except Exception:
-                pass
-
             # Check for active session using thread_id if provided
             active_session = None
             if thread_id:
                 active_session = self.session_manager.get_session(thread_id)
                 debug_log(f"Active session check for thread_id {thread_id}: {active_session is not None}", "bot_logic")
 
+            # Pre-calc common intent flags so we can reuse them safely
+            try:
+                start_phrase = self._is_timeoff_start_message(message)
+            except Exception:
+                start_phrase = False
+            try:
+                continuation_phrase = self._is_timeoff_continuation_message(message)
+            except Exception:
+                continuation_phrase = False
+            has_timeoff_session = bool(active_session and active_session.get('type') == 'timeoff')
+
             # Detect new time-off intent first
             is_timeoff, confidence, extracted_data = self.timeoff_service.detect_timeoff_intent(message)
             debug_log(f"Time-off detection complete: is_timeoff={is_timeoff}, confidence={confidence}", "bot_logic")
 
+            wants_timeoff = (
+                start_phrase or
+                (continuation_phrase and has_timeoff_session) or
+                (is_timeoff and confidence >= 0.3) or
+                has_timeoff_session
+            )
+
+            # Enforce single active flow per thread: block if another flow is active only when user is interacting with time-off
+            if wants_timeoff:
+                try:
+                    active_any = self.session_manager.get_active_session(thread_id) if thread_id else None
+                    if active_any and active_any.get('type') not in (None, 'timeoff') and active_any.get('state') in ['started', 'active']:
+                        other = active_any.get('type', 'another')
+                        return {
+                            'message': f"You're currently in an active {other} request. Please complete it or type 'cancel' before starting a new time-off request.",
+                            'thread_id': thread_id,
+                            'source': self.model,
+                            'confidence_score': 1.0,
+                            'session_handled': True
+                        }
+                except Exception:
+                    pass
+
             # If the user explicitly restarts while a session exists, wipe and start fresh
-            if self._is_timeoff_start_message(message):
+            if start_phrase:
                 debug_log("Restart phrase detected during active flow; resetting session.", "bot_logic")
                 self._reset_timeoff_sessions(thread_id, 'User restarted time-off flow mid-session')
                 return self._start_timeoff_session(message, thread_id, extracted_data if is_timeoff else {}, employee_data)
@@ -1604,6 +1623,15 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 # widget-provided format is valid; trust it and store
                 start_date = _dt.strptime(a, '%d/%m/%Y').strftime('%Y-%m-%d')
                 end_date = _dt.strptime(b, '%d/%m/%Y').strftime('%Y-%m-%d')
+                if is_halfday_flow and start_date != end_date:
+                    try:
+                        self.session_manager.update_session(thread_id, {'step': 2})
+                    except Exception:
+                        pass
+                    return self._create_response_with_datepicker_single(
+                        "Custom Hours are limited to one day. Please pick a single date.",
+                        thread_id
+                    )
                 self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
                 self.session_manager.advance_session_step(thread_id)
                 try:
@@ -1627,6 +1655,11 @@ Be thorough and informative while maintaining clarity and accuracy."""
                         return _dt.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
                     except Exception:
                         return d
+                if is_halfday_flow:
+                    hour_text = (
+                        "Great, got your date. Please choose your hours (from/to)."
+                    )
+                    return self._create_response_with_hour_picker(hour_text, thread_id)
                 response_text = f"Great, noted your dates. Here's your time-off request summary:\n\n"
                 response_text += f"📋 **Leave Type:** {selected_type.get('name', 'Unknown') if selected_type else 'Unknown'}\n"
                 response_text += f"📅 **Start Date:** {dd_mm_yyyy(start_date)}\n"

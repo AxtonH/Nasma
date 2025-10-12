@@ -25,7 +25,7 @@ class OvertimeService:
 
     Flow steps:
       1) Initialize: resolve approval.category for company ("Overtime - {Company}")
-      2) Ask for date range (widget: date_range_picker, context_key='overtime_date_range')
+      2) Ask for overtime date (widget: single_date_picker, context_key='overtime_date_range')
       3) Ask for hour range (widget: hour_range_picker)
       4) Show project dropdown (widget: select_dropdown, context_key='overtime_project_id')
       5) Confirmation -> Submit approval.request
@@ -59,7 +59,8 @@ class OvertimeService:
 
         # Require action-oriented phrasing if "overtime" is present
         action_markers = [
-            'request', 'apply', 'submit', 'book', 'file', 'log', 'record', 'claim', 'enter', 'register', 'start'
+            'request', 'apply', 'submit', 'book', 'file', 'log', 'record', 'claim', 'enter', 'register', 'start',
+            'ask', 'need', 'want'
         ]
 
         score = 0.0
@@ -294,11 +295,11 @@ class OvertimeService:
             self.session_manager.start_session(thread_id, 'overtime', session_data)
 
             return {
-                'message': 'Please select the overtime period (start to end).',
+                'message': 'Please select the overtime date.',
                 'thread_id': thread_id,
                 'session_handled': True,
                 'widgets': {
-                    'date_range_picker': True,
+                    'single_date_picker': True,
                     'context_key': 'overtime_date_range'
                 }
             }
@@ -346,10 +347,7 @@ class OvertimeService:
                     value = msg
                 if value:
                     import re
-                    parts = [p.strip() for p in re.split(r"\s*(?:to|until|till|-|—|–)\s*", value) if p.strip()]
-                    # Accept single-day by duplicating
-                    if len(parts) == 1:
-                        parts = parts * 2
+                    parts = [p.strip() for p in re.split(r"\s*(?:to|until|till|[-–—])\s*", value, flags=re.IGNORECASE) if p.strip()]
                     def _norm(token: str) -> Optional[str]:
                         from datetime import datetime
                         token = token.replace('.', '/').replace('-', '/').strip()
@@ -362,10 +360,25 @@ class OvertimeService:
                             except Exception:
                                 continue
                         return None
-                    if len(parts) == 2:
+                    if len(parts) == 1:
+                        single = _norm(parts[0])
+                        if single:
+                            data['date_start_dmy'] = single
+                            data['date_end_dmy'] = single
+                            self.session_manager.update_session(thread_id, {'data': data, 'step': 2})
+                            # Ask for hour range next
+                            return self._hour_picker_response('Please choose your overtime hours (from/to).', thread_id)
+                    elif len(parts) == 2:
                         s = _norm(parts[0])
                         e = _norm(parts[1])
                         if s and e:
+                            if s != e:
+                                return {
+                                    'message': 'Overtime must be submitted for a single day. Please pick one date.',
+                                    'thread_id': thread_id,
+                                    'session_handled': True,
+                                    'widgets': { 'single_date_picker': True, 'context_key': 'overtime_date_range' }
+                                }
                             data['date_start_dmy'] = s
                             data['date_end_dmy'] = e
                             self.session_manager.update_session(thread_id, {'data': data, 'step': 2})
@@ -373,10 +386,10 @@ class OvertimeService:
                             return self._hour_picker_response('Please choose your overtime hours (from/to).', thread_id)
                 # Re-ask with widget if not understood
                 return {
-                    'message': 'Please select the overtime period (start to end). You may choose a single day as well.',
+                    'message': 'Please pick a single overtime date.',
                     'thread_id': thread_id,
                     'session_handled': True,
-                    'widgets': { 'date_range_picker': True, 'context_key': 'overtime_date_range' }
+                    'widgets': { 'single_date_picker': True, 'context_key': 'overtime_date_range' }
                 }
 
             # Step 2: Capture hour range (hour_from/hour_to pairs)
@@ -741,5 +754,3 @@ class OvertimeService:
         except Exception:
             # Fallback to today
             return date.today().strftime('%Y-%m-%d')
-
-
