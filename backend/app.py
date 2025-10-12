@@ -938,13 +938,7 @@ def create_app():
             ):
                 # Manager query: team overview with time off
                 try:
-                    from services.manager_helper import (
-                        get_team_overview,
-                        format_team_overview_message,
-                        build_team_overview_table_widget,
-                        build_overtime_table_widget,
-                        build_main_overview_table_widget,
-                    )
+                    # Use functions imported at module load time; avoid runtime absolute imports that break in package mode
                     ok_overview, overview = get_team_overview(odoo_service, employee_service, days_ahead=60)
                     if ok_overview:
                         if isinstance(overview, list):
