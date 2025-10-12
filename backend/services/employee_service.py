@@ -137,7 +137,12 @@ class EmployeeService:
                     self._log(f"Result data: {result['result']}", "odoo_data")
                     return True, result['result']
                 else:
-                    error_msg = f"Odoo API error: {result.get('error', 'Unknown error')}"
+                    # Normalize error shape
+                    err_obj = result.get('error')
+                    if err_obj and isinstance(err_obj, dict):
+                        error_msg = f"Odoo API error: {err_obj}"
+                    else:
+                        error_msg = f"Odoo API error: {result.get('error', 'Unknown error')}"
                     self._log(f"{error_msg}", "odoo_data")
                     return False, error_msg
             else:
@@ -147,6 +152,117 @@ class EmployeeService:
                 
         except Exception as e:
             return False, f"Request error: {str(e)}"
+
+    def _parse_access_error_forbidden_fields(self, error_obj: Any) -> List[str]:
+        """Extract field names from Odoo AccessError message if present.
+
+        Returns a list of field names that caused access restrictions.
+        """
+        forbidden: List[str] = []
+        try:
+            if not error_obj:
+                return forbidden
+            # error_obj may be a string (already formatted) or dict with 'data'/'message'
+            text = None
+            if isinstance(error_obj, dict):
+                # Prefer detailed message inside data.message or data.debug
+                data = error_obj.get('data') or {}
+                text = data.get('message') or data.get('debug') or error_obj.get('message')
+            if not text and isinstance(error_obj, str):
+                text = error_obj
+            if not text:
+                return forbidden
+
+            # Look for bullet list like "- field (allowed for groups ...)"
+            lines = str(text).splitlines()
+            for line in lines:
+                line = line.strip()
+                if line.startswith('- '):
+                    # Extract token between '- ' and first space/('(')
+                    # e.g. "- birthday (allowed for groups '...')"
+                    field = line[2:]
+                    # Trim trailing group clause
+                    paren = field.find(' ')
+                    if paren > 0:
+                        field = field[:paren]
+                    paren2 = field.find('(')
+                    if paren2 > 0:
+                        field = field[:paren2]
+                    field = field.strip().strip('-').strip()
+                    if field:
+                        forbidden.append(field)
+        except Exception:
+            pass
+        return forbidden
+
+    def _safe_employee_read(self, employee_ids: List[int], fields: List[str]) -> Tuple[bool, Any]:
+        """Perform hr.employee read with graceful fallback when AccessError occurs.
+
+        Strategy:
+        - Attempt read with requested fields
+        - If AccessError, parse forbidden fields and retry without them
+        - If still failing, fallback to a minimal safe field set
+        """
+        # First attempt
+        params = {'args': [employee_ids], 'kwargs': {'fields': fields}}
+        ok, data = self._make_odoo_request('hr.employee', 'read', params)
+        if ok:
+            return ok, data
+
+        # Detect AccessError and parse forbidden fields
+        forbidden = self._parse_access_error_forbidden_fields(data)
+        if forbidden:
+            allowed_fields = [f for f in fields if f not in forbidden]
+            if not allowed_fields:
+                # Keep at least name/id
+                allowed_fields = ['name']
+            params2 = {'args': [employee_ids], 'kwargs': {'fields': allowed_fields}}
+            ok2, data2 = self._make_odoo_request('hr.employee', 'read', params2)
+            if ok2:
+                return True, data2
+
+        # Final fallback to a minimal safe set
+        minimal_fields = ['name', 'job_title', 'work_email', 'department_id', 'company_id', 'user_id']
+        params3 = {'args': [employee_ids], 'kwargs': {'fields': minimal_fields}}
+        return self._make_odoo_request('hr.employee', 'read', params3)
+
+    def _safe_employee_search_read(self, domain: List[Any], fields: List[str], limit: int = 100, order: Optional[str] = None) -> Tuple[bool, Any]:
+        """Perform hr.employee search_read with fallback on AccessError fields."""
+        kwargs = {'fields': fields, 'limit': limit}
+        if order:
+            kwargs['order'] = order
+        params = {'args': [domain], 'kwargs': kwargs}
+        ok, data = self._make_odoo_request('hr.employee', 'search_read', params)
+        if ok:
+            return ok, data
+        forbidden = self._parse_access_error_forbidden_fields(data)
+        if forbidden:
+            allowed_fields = [f for f in fields if f not in forbidden]
+            if not allowed_fields:
+                allowed_fields = ['name']
+            kwargs2 = {'fields': allowed_fields, 'limit': limit}
+            if order:
+                kwargs2['order'] = order
+            params2 = {'args': [domain], 'kwargs': kwargs2}
+            ok2, data2 = self._make_odoo_request('hr.employee', 'search_read', params2)
+            if ok2:
+                return True, data2
+        # Final minimal fallback
+        minimal_fields = ['name', 'job_title', 'department_id']
+        kwargs3 = {'fields': minimal_fields, 'limit': limit}
+        if order:
+            kwargs3['order'] = order
+        params3 = {'args': [domain], 'kwargs': kwargs3}
+        return self._make_odoo_request('hr.employee', 'search_read', params3)
+
+    def _get_safe_public_employee_fields(self) -> List[str]:
+        """Return a conservative field set likely allowed for regular employees."""
+        # Exclude sensitive fields like birthday, identification_id, marital, category_ids, gender, planning_role_ids
+        return [
+            'name', 'job_title', 'work_email', 'work_phone', 'department_id',
+            'mobile_phone', 'address_id', 'work_location_id', 'parent_id', 'coach_id',
+            'job_id', 'resource_calendar_id', 'tz', 'company_id', 'user_id'
+        ]
     
     def _expand_related_data(self, employee_data: Dict) -> Dict:
         """Expand related field data using batched reads and per-record caching"""
@@ -343,14 +459,9 @@ class EmployeeService:
                 return False, "No employee record found for current user"
 
             # Chunked read (single id, but keep structure for future batch use)
-            params = {
-                'args': [id_list],
-                'kwargs': {'fields': available_fields}
-            }
-            
-            self._log(f"Making Odoo request with params: {params}", "odoo_data")
-            
-            success, data = self._make_odoo_request('hr.employee', 'read', params)
+            # Use safe read wrapper to avoid AccessError field violations
+            self._log(f"Making safe employee read for ids: {id_list} with fields: {available_fields}", "odoo_data")
+            success, data = self._safe_employee_read(id_list, available_fields)
             
             self._log(f"Employee search result - Success: {success}", "odoo_data")
             self._log(f"Employee search result - Data length: {len(data) if isinstance(data, list) else 'Not a list'}", "odoo_data")
@@ -415,12 +526,8 @@ class EmployeeService:
             # For now, limit to current user's data (implement role-based access later)
             domain.append(('user_id', '=', user_id))
             
-            params = {
-                'args': [domain],
-                'kwargs': {'fields': self.employee_fields, 'limit': 100}
-            }
-            
-            success, data = self._make_odoo_request('hr.employee', 'search_read', params)
+            safe_fields = self._get_safe_public_employee_fields()
+            success, data = self._safe_employee_search_read(domain, safe_fields, limit=100)
             
             if success:
                 # Expand related data for each employee
@@ -458,12 +565,7 @@ class EmployeeService:
             if cached_data:
                 return True, cached_data
             
-            params = {
-                'args': [[employee_id]],
-                'kwargs': {'fields': self.employee_fields}
-            }
-            
-            success, data = self._make_odoo_request('hr.employee', 'read', params)
+            success, data = self._safe_employee_read([employee_id], self.employee_fields)
             
             if success and data:
                 employee_data = data[0]
