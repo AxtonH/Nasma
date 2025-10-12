@@ -225,6 +225,23 @@ class EmployeeService:
         params3 = {'args': [employee_ids], 'kwargs': {'fields': minimal_fields}}
         return self._make_odoo_request('hr.employee', 'read', params3)
 
+    def _safe_model_read(self, model: str, record_ids: List[int], fields: List[str]) -> Tuple[bool, Any]:
+        """Generic safe read with AccessError field fallback for any model."""
+        params = {'args': [record_ids], 'kwargs': {'fields': fields}}
+        ok, data = self._make_odoo_request(model, 'read', params)
+        if ok:
+            return ok, data
+        forbidden = self._parse_access_error_forbidden_fields(data)
+        if forbidden:
+            allowed_fields = [f for f in fields if f not in forbidden] or ['id']
+            params2 = {'args': [record_ids], 'kwargs': {'fields': allowed_fields}}
+            ok2, data2 = self._make_odoo_request(model, 'read', params2)
+            if ok2:
+                return True, data2
+        # Minimal fallback
+        params3 = {'args': [record_ids], 'kwargs': {'fields': ['id']}}
+        return self._make_odoo_request(model, 'read', params3)
+
     def _safe_employee_search_read(self, domain: List[Any], fields: List[str], limit: int = 100, order: Optional[str] = None) -> Tuple[bool, Any]:
         """Perform hr.employee search_read with fallback on AccessError fields."""
         kwargs = {'fields': fields, 'limit': limit}
@@ -611,12 +628,16 @@ class EmployeeService:
             if not ok_ids or not isinstance(id_list, list) or not id_list:
                 return False, "No employee found"
 
-            params = {
-                'args': [id_list],
-                'kwargs': {'fields': [field_name]}
-            }
-            ok_read, data = self._make_odoo_request('hr.employee', 'read', params)
+            # Use safe read in case the image field is restricted
+            ok_read, data = self._safe_employee_read(id_list, [field_name])
             if not ok_read or not isinstance(data, list) or not data:
+                # Try fallback on res.users image
+                ok_user, data_user = self._safe_model_read('res.users', [self.odoo_service.user_id], [field_name])
+                if ok_user and isinstance(data_user, list) and data_user:
+                    img_user = data_user[0].get(field_name)
+                    if img_user:
+                        self._set_cache(cache_key, img_user)
+                        return True, img_user
                 return False, "Avatar not available"
 
             img = data[0].get(field_name)
