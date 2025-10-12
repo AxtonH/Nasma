@@ -670,7 +670,7 @@
                         </div>
                     </div>
                 </main>
-                <footer class="px-10 py-4 pb-8">
+                <footer class="px-10 py-4 pb-4">
                     <div class="flex items-center justify-center gap-6 mb-4 overflow-x-auto -mx-2 px-2 suggestion-row" id="initialSuggestionRow">
                         <button class="suggestion-card card" data-suggestion="i want time off">
                             <div class="card-content">
@@ -705,6 +705,12 @@
                             </button>
                         </div>
                     </div>
+                    <div class="flex justify-center mt-4">
+                        <div class="flex items-center gap-2 text-sm text-gray-600">
+                            <span>Fast drafts, not final files. always review with your designer's eye</span>
+                            <img src="/static/Nasma-Avatar.svg" alt="Nasma avatar" class="w-6 h-6"/>
+                        </div>
+                    </div>
                 </footer>
             </div>
         </div>
@@ -721,10 +727,10 @@
                     </button>
                 </div>
                 <div class="flex-1 p-6">
-                    <h2 class="text-xl font-bold text-gray-800 mb-4">Chat History</h2>
+                    <h2 class="text-xl font-bold text-gray-800 mb-4"><span class="line-through">Chat History</span></h2>
                     <div class="space-y-2">
                         <!-- Chat history items will be added here -->
-                        <div class="text-gray-500 text-sm">No previous chats</div>
+                        <div class="text-gray-500 text-sm">coming soon!</div>
                     </div>
                 </div>
                 <div class="p-6 border-t border-gray-200/50 space-y-3" style="position: relative !important; z-index: 2147483647 !important; pointer-events: auto !important;">
@@ -796,7 +802,7 @@
                     <!-- Chat messages will be dynamically added here -->
                 </div>
             </main>
-            <footer class="fixed bottom-0 left-0 right-0 flex justify-center p-4 pb-8" style="background: transparent;">
+            <footer class="fixed bottom-0 left-0 right-0 flex justify-center p-4 pb-4" style="background: transparent;">
                 <div class="w-full relative">
                     <!-- Manager-specific prompts are shown inline in the bottom bar now -->
 
@@ -817,6 +823,12 @@
                             <button id="sendButton" onclick="sendMessage()" class="send-icon">
                                 <img src="/static/Send-button.svg" alt="Send" class="w-8 h-8" />
                             </button>
+                        </div>
+                    </div>
+                    <div class="flex justify-center mt-4">
+                        <div class="flex items-center gap-2 text-sm text-gray-600">
+                            <span>Fast drafts, not final files. always review with your designer's eye</span>
+                            <img src="/static/Nasma-Avatar.svg" alt="Nasma avatar" class="w-6 h-6"/>
                         </div>
                     </div>
                 </div>
@@ -2881,9 +2893,9 @@
                 </button>
             </div>
             <div class="new-sidebar-content">
-                <h2>Chat History</h2>
+                <h2><span class="line-through">Chat History</span></h2>
                 <div class="chat-history">
-                    <div class="no-chats">No previous chats</div>
+                    <div class="no-chats">coming soon!</div>
                 </div>
             </div>
             <div class="new-sidebar-footer" style="padding: 1.5rem; border-top: 1px solid rgba(0, 0, 0, 0.1); display: flex; flex-direction: column; gap: 0.75rem;">
