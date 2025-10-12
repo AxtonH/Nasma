@@ -12,6 +12,13 @@ try:
     from .config.settings import Config
     from .services.intent_service import IntentService
     from .services.overtime_service import OvertimeService
+    from .services.manager_helper import (
+        get_team_overview,
+        format_team_overview_message,
+        build_team_overview_table_widget,
+        build_overtime_table_widget,
+        build_main_overview_table_widget,
+    )
 except Exception:
     # Local import style when running as script from backend/ directory
     from services.chatgpt_service import ChatGPTService
@@ -24,6 +31,13 @@ except Exception:
     from config.settings import Config
     from services.intent_service import IntentService
     from services.overtime_service import OvertimeService
+    from services.manager_helper import (
+        get_team_overview,
+        format_team_overview_message,
+        build_team_overview_table_widget,
+        build_overtime_table_widget,
+        build_main_overview_table_widget,
+    )
 import os
 from datetime import date
 import time
@@ -901,13 +915,6 @@ def create_app():
             ):
                 # Manager query: team overview with time off
                 try:
-                    from services.manager_helper import (
-                        get_team_overview,
-                        format_team_overview_message,
-                        build_team_overview_table_widget,
-                        build_overtime_table_widget,
-                        build_main_overview_table_widget,
-                    )
                     ok_overview, overview = get_team_overview(odoo_service, employee_service, days_ahead=60)
                     if ok_overview:
                         if isinstance(overview, list):
