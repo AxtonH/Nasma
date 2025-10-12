@@ -1820,10 +1820,32 @@ def create_app():
             # Fetch lightweight avatar (cached), do not load full employee payload
             ok_img, img = employee_service.get_current_user_avatar(size=128)
             if ok_img and img:
+                # Detect mime type from payload to avoid mismatched data URLs (e.g., SVG placeholder)
+                mime = 'image/jpeg'
+                try:
+                    import base64
+                    data_bytes = base64.b64decode(img, validate=True)
+                    head = data_bytes[:16]
+                    # JPEG
+                    if head.startswith(b'\xFF\xD8\xFF'):
+                        mime = 'image/jpeg'
+                    # PNG
+                    elif head.startswith(b'\x89PNG\r\n\x1a\n'):
+                        mime = 'image/png'
+                    # WEBP (RIFF....WEBP)
+                    elif data_bytes[:4] == b'RIFF' and data_bytes[8:12] == b'WEBP':
+                        mime = 'image/webp'
+                    else:
+                        # SVG if XML text
+                        trimmed = data_bytes.lstrip()
+                        if trimmed.startswith(b'<?xml') or trimmed.startswith(b'<svg'):
+                            mime = 'image/svg+xml'
+                except Exception:
+                    pass
                 return jsonify({
                     'success': True,
                     'image_data': img,
-                    'content_type': 'image/jpeg'
+                    'content_type': mime
                 })
             return jsonify({ 'success': False, 'message': 'No avatar image available' }), 404
         except Exception as e:
