@@ -148,6 +148,29 @@ def create_app():
     
     # Wire services together
     chatgpt_service.set_services(timeoff_service, session_manager, halfday_service, reimbursement_service)
+
+    PEOPLE_CULTURE_DENIED = "sorry this flow is restricted to members of the People & Culture Department"
+
+    def _is_people_culture_member(data) -> bool:
+        """Return True if the provided employee data belongs to People & Culture."""
+        try:
+            if not isinstance(data, dict):
+                return False
+            dept_name = ''
+            dept_details = data.get('department_id_details')
+            if isinstance(dept_details, dict):
+                dept_name = dept_details.get('name') or ''
+            elif isinstance(dept_details, (list, tuple)) and len(dept_details) > 1:
+                dept_name = dept_details[1] or ''
+            else:
+                raw = data.get('department_id')
+                if isinstance(raw, (list, tuple)) and len(raw) > 1:
+                    dept_name = raw[1] or ''
+                elif isinstance(raw, str):
+                    dept_name = raw
+            return dept_name.strip().lower() == 'people & culture'
+        except Exception:
+            return False
     
     @app.before_request
     def _rehydrate_odoo_service_from_session():
@@ -915,6 +938,13 @@ def create_app():
             ):
                 # Manager query: team overview with time off
                 try:
+                    from services.manager_helper import (
+                        get_team_overview,
+                        format_team_overview_message,
+                        build_team_overview_table_widget,
+                        build_overtime_table_widget,
+                        build_main_overview_table_widget,
+                    )
                     ok_overview, overview = get_team_overview(odoo_service, employee_service, days_ahead=60)
                     if ok_overview:
                         if isinstance(overview, list):
@@ -970,32 +1000,46 @@ def create_app():
                     response = { 'message': f"An error occurred preparing the team overview: {e}" }
             elif normalized_msg in {
                 'set up new users','setup new users','create new users','new users',
-                'set up new user','setup new user','create a new user','create new user','new user','create employee','add employee','new joiner'
+                'set up new user','setup new user','set up a new user','setup a new user',
+                'create a new user','create new user','new user','create employee','add employee','new joiner'
             }:
-                try:
-                    from services.new_user_flow import start_new_user_flow, handle_new_user_action
-                    response = start_new_user_flow()
-                except Exception as e:
-                    response = { 'message': f"Couldn't start the new user flow: {e}" }
+                if not _is_people_culture_member(employee_data):
+                    response = { 'message': PEOPLE_CULTURE_DENIED }
+                else:
+                    try:
+                        from services.new_user_flow import start_new_user_flow, handle_new_user_action
+                        response = start_new_user_flow()
+                    except Exception as e:
+                        response = { 'message': f"Couldn't start the new user flow: {e}" }
             elif normalized_msg in {'new_user_manual', 'new_user_upload'}:
-                try:
-                    from services.new_user_flow import handle_new_user_action
-                    resp = handle_new_user_action(normalized_msg)
-                    # Early return for upload widget so frontend doesn't treat empty message as error
-                    if normalized_msg == 'new_user_upload':
-                        widgets = resp.get('widgets') if isinstance(resp, dict) else None
-                        return jsonify({
-                            'response': resp.get('message', ''),
-                            'status': 'success',
-                            'has_employee_context': employee_data is not None,
-                            'thread_id': thread_id,
-                            'widgets': widgets
-                        })
-                    response = resp
-                except Exception as e:
-                    response = { 'message': f"Couldn't proceed: {e}" }
+                if not _is_people_culture_member(employee_data):
+                    response = { 'message': PEOPLE_CULTURE_DENIED }
+                else:
+                    try:
+                        from services.new_user_flow import handle_new_user_action
+                        resp = handle_new_user_action(normalized_msg)
+                        # Early return for upload widget so frontend doesn't treat empty message as error
+                        if normalized_msg == 'new_user_upload':
+                            widgets = resp.get('widgets') if isinstance(resp, dict) else None
+                            return jsonify({
+                                'response': resp.get('message', ''),
+                                'status': 'success',
+                                'has_employee_context': employee_data is not None,
+                                'thread_id': thread_id,
+                                'widgets': widgets
+                            })
+                        response = resp
+                    except Exception as e:
+                        response = { 'message': f"Couldn't proceed: {e}" }
             elif normalized_msg in {'upload file','upload users','upload new users file','upload user file'}:
                 # Allow typing "upload file" to open the upload widget bubble directly
+                if not _is_people_culture_member(employee_data):
+                    return jsonify({
+                        'response': PEOPLE_CULTURE_DENIED,
+                        'status': 'success',
+                        'has_employee_context': employee_data is not None,
+                        'thread_id': thread_id
+                    })
                 return jsonify({
                     'response': ' ',
                     'status': 'success',
@@ -1004,127 +1048,152 @@ def create_app():
                     'widgets': { 'new_user_upload': True }
                 })
             elif normalized_msg == 'new_user_upload_confirm':
-                try:
-                    from services.new_user_flow import create_employees_batch
-                    response = create_employees_batch(odoo_service)
-                except Exception as e:
-                    response = { 'message': f"Couldn't confirm: {e}" }
-            elif normalized_msg.startswith('assign_company:'):
-                try:
-                    # Format: assign_company:{index}:{company_label}
-                    parts = normalized_msg.split(':', 2)
-                    if len(parts) < 3:
-                        response = { 'message': 'Invalid assign company command' }
-                    else:
-                        idx = int(parts[1])
-                        label = parts[2]
-                        from services.new_user_flow import assign_company_to_record, confirmation_message
-                        result = assign_company_to_record(idx, label, odoo_service)
-                        if result.get('success'):
-                            rows = result.get('rows') or []
-                            response = {
-                                'message': 'updated',
-                                'buttons': { 'widgets': { 'new_user_confirm_rows': rows } }
-                            }
-                        else:
-                            response = { 'message': result.get('message') or 'Failed to assign company' }
-                except Exception as e:
-                    response = { 'message': f"Assign company error: {e}" }
-            elif normalized_msg == 'new_user_assign_hardware_no':
-                session.pop('new_user_recent_employees', None)
-                response = { 'message': 'Alright, no hardware will be assigned right now. Let me know if you need anything else.' }
-            elif normalized_msg.startswith('assign_hardware:'):
-                try:
-                    _, emp_id_str = normalized_msg.split(':', 1)
-                    emp_id = int(emp_id_str)
-                except Exception:
-                    response = { 'message': 'Invalid hardware assignment command.' }
+                if not _is_people_culture_member(employee_data):
+                    response = { 'message': PEOPLE_CULTURE_DENIED }
                 else:
-                    recent = session.get('new_user_recent_employees') or []
-                    match = next((item for item in recent if int(item.get('employee_id', 0)) == emp_id), None)
-                    if not match:
-                        response = { 'message': 'I could not find that teammate in the recently created list.' }
-                    else:
-                        from services.new_user_flow import list_available_hardware
-                        hardware_items = list_available_hardware(odoo_service)
-                        if not hardware_items:
-                            response = { 'message': 'I could not find any available hardware right now. Please check again later.' }
+                    try:
+                        from services.new_user_flow import create_employees_batch
+                        response = create_employees_batch(odoo_service)
+                    except Exception as e:
+                        response = { 'message': f"Couldn't confirm: {e}" }
+            elif normalized_msg.startswith('assign_company:'):
+                if not _is_people_culture_member(employee_data):
+                    response = { 'message': PEOPLE_CULTURE_DENIED }
+                else:
+                    try:
+                        # Format: assign_company:{index}:{company_label}
+                        parts = normalized_msg.split(':', 2)
+                        if len(parts) < 3:
+                            response = { 'message': 'Invalid assign company command' }
                         else:
-                            options = [{
-                                'label': item.get('name', ''),
-                                'value': str(item.get('id'))
-                            } for item in hardware_items if item.get('id') and item.get('name')]
-                            hardware_candidates = session.get('hardware_candidates') or {}
-                            hardware_candidates[str(emp_id)] = {
-                                'employee_name': match.get('name', ''),
-                                'options': options
-                            }
-                            session['hardware_candidates'] = hardware_candidates
-                            first_name = (match.get('first_name') or match.get('name', '') or 'the employee').split(' ')[0]
-                            response = {
-                                'message': f"Select hardware for {first_name}:",
-                                'widgets': {
-                                    'hardware_assign': {
-                                        'employee_id': emp_id,
-                                        'employee_name': match.get('name', ''),
-                                        'options': options
+                            idx = int(parts[1])
+                            label = parts[2]
+                            from services.new_user_flow import assign_company_to_record, confirmation_message
+                            result = assign_company_to_record(idx, label, odoo_service)
+                            if result.get('success'):
+                                rows = result.get('rows') or []
+                                response = {
+                                    'message': 'updated',
+                                    'buttons': { 'widgets': { 'new_user_confirm_rows': rows } }
+                                }
+                            else:
+                                response = { 'message': result.get('message') or 'Failed to assign company' }
+                    except Exception as e:
+                        response = { 'message': f"Assign company error: {e}" }
+            elif normalized_msg == 'new_user_assign_hardware_no':
+                if not _is_people_culture_member(employee_data):
+                    response = { 'message': PEOPLE_CULTURE_DENIED }
+                else:
+                    session.pop('new_user_recent_employees', None)
+                    response = { 'message': 'Alright, no hardware will be assigned right now. Let me know if you need anything else.' }
+            elif normalized_msg.startswith('assign_hardware:'):
+                if not _is_people_culture_member(employee_data):
+                    response = { 'message': PEOPLE_CULTURE_DENIED }
+                else:
+                    try:
+                        _, emp_id_str = normalized_msg.split(':', 1)
+                        emp_id = int(emp_id_str)
+                    except Exception:
+                        response = { 'message': 'Invalid hardware assignment command.' }
+                    else:
+                        recent = session.get('new_user_recent_employees') or []
+                        match = next((item for item in recent if int(item.get('employee_id', 0)) == emp_id), None)
+                        if not match:
+                            response = { 'message': 'I could not find that teammate in the recently created list.' }
+                        else:
+                            from services.new_user_flow import list_available_hardware
+                            hardware_items = list_available_hardware(odoo_service)
+                            if not hardware_items:
+                                response = { 'message': 'I could not find any available hardware right now. Please check again later.' }
+                            else:
+                                options = [{
+                                    'label': item.get('name', ''),
+                                    'value': str(item.get('id'))
+                                } for item in hardware_items if item.get('id') and item.get('name')]
+                                hardware_candidates = session.get('hardware_candidates') or {}
+                                hardware_candidates[str(emp_id)] = {
+                                    'employee_name': match.get('name', ''),
+                                    'options': options
+                                }
+                                session['hardware_candidates'] = hardware_candidates
+                                first_name = (match.get('first_name') or match.get('name', '') or 'the employee').split(' ')[0]
+                                response = {
+                                    'message': f"Select hardware for {first_name}:",
+                                    'widgets': {
+                                        'hardware_assign': {
+                                            'employee_id': emp_id,
+                                            'employee_name': match.get('name', ''),
+                                            'options': options
+                                        }
                                     }
                                 }
-                            }
             elif normalized_msg.startswith('hardware_assign_confirm:'):
-                try:
-                    _, emp_id_str, hw_id_str = normalized_msg.split(':', 2)
-                    emp_id = int(emp_id_str)
-                    hardware_id = int(hw_id_str)
-                except Exception:
-                    response = { 'message': 'That hardware confirmation looked malformed. Could you try again?' }
+                if not _is_people_culture_member(employee_data):
+                    response = { 'message': PEOPLE_CULTURE_DENIED }
                 else:
-                    candidates = session.get('hardware_candidates') or {}
-                    info = candidates.get(str(emp_id), {})
-                    employee_name = info.get('employee_name', 'the employee')
-                    first_name = employee_name.split(' ')[0] if employee_name else 'the employee'
-                    options = info.get('options') or []
-                    hardware_name = ''
-                    for opt in options:
-                        if str(opt.get('value')) == str(hardware_id):
-                            hardware_name = opt.get('label', 'the selected hardware')
-                            break
-                    if not hardware_name:
-                        hardware_name = 'the selected hardware'
-                    from services.new_user_flow import assign_hardware_to_employee, list_available_hardware
-                    ok_assign, error_msg = assign_hardware_to_employee(odoo_service, hardware_id, emp_id)
-                    if ok_assign:
-                        refreshed = list_available_hardware(odoo_service)
-                        refreshed_options = [{
-                            'label': item.get('name', ''),
-                            'value': str(item.get('id'))
-                        } for item in refreshed if item.get('id') and item.get('name')]
-                        unit = candidates.get(str(emp_id)) or {}
-                        unit['employee_name'] = employee_name
-                        unit['options'] = refreshed_options
-                        candidates[str(emp_id)] = unit
-                        session['hardware_candidates'] = candidates
-                        recent = session.get('new_user_recent_employees') or []
-                        if not isinstance(recent, list):
-                            recent = []
-                        if not any(int(item.get('employee_id', 0)) == emp_id for item in recent):
-                            recent.append({
-                                'employee_id': emp_id,
-                                'name': employee_name,
-                                'first_name': first_name
-                            })
-                        session['new_user_recent_employees'] = recent
-                        msg = f"Great choice! I've assigned {hardware_name} to {first_name}."
-                        response = {
-                            'message': msg,
-                            'hardware_options': recent,
-                            'hardware_message': "Would you like to assign another new Prezlaber hardware?"
-                        }
+                    try:
+                        _, emp_id_str, hw_id_str = normalized_msg.split(':', 2)
+                        emp_id = int(emp_id_str)
+                        hardware_id = int(hw_id_str)
+                    except Exception:
+                        response = { 'message': 'That hardware confirmation looked malformed. Could you try again?' }
                     else:
-                        response = { 'message': f"I couldn't assign the hardware: {error_msg}" }
+                        candidates = session.get('hardware_candidates') or {}
+                        info = candidates.get(str(emp_id), {})
+                        employee_name = info.get('employee_name', 'the employee')
+                        first_name = employee_name.split(' ')[0] if employee_name else 'the employee'
+                        options = info.get('options') or []
+                        hardware_name = ''
+                        for opt in options:
+                            if str(opt.get('value')) == str(hardware_id):
+                                hardware_name = opt.get('label', 'the selected hardware')
+                                break
+                        if not hardware_name:
+                            hardware_name = 'the selected hardware'
+                        from services.new_user_flow import assign_hardware_to_employee, list_available_hardware
+                        ok_assign, error_msg = assign_hardware_to_employee(odoo_service, hardware_id, emp_id)
+                        if ok_assign:
+                            refreshed = list_available_hardware(odoo_service)
+                            refreshed_options = [{
+                                'label': item.get('name', ''),
+                                'value': str(item.get('id'))
+                            } for item in refreshed if item.get('id') and item.get('name')]
+                            unit = candidates.get(str(emp_id)) or {}
+                            unit['employee_name'] = employee_name
+                            unit['options'] = refreshed_options
+                            candidates[str(emp_id)] = unit
+                            session['hardware_candidates'] = candidates
+                            recent = session.get('new_user_recent_employees') or []
+                            if not isinstance(recent, list):
+                                recent = []
+                            if not any(int(item.get('employee_id', 0)) == emp_id for item in recent):
+                                recent.append({
+                                    'employee_id': emp_id,
+                                    'name': employee_name,
+                                    'first_name': first_name
+                                })
+                            session['new_user_recent_employees'] = recent
+                            msg = f"Great choice! I've assigned {hardware_name} to {first_name}."
+                            response = {
+                                'message': msg,
+                                'hardware_options': recent,
+                                'hardware_message': "Would you like to assign another new Prezlaber hardware?"
+                            }
+                        else:
+                            response = { 'message': f"I couldn't assign the hardware: {error_msg}" }
             elif normalized_msg == 'hardware_assign_cancel':
-                response = { 'message': "No problem, I'll skip that hardware assignment for now." }
+                if not _is_people_culture_member(employee_data):
+                    response = { 'message': PEOPLE_CULTURE_DENIED }
+                else:
+                    response = { 'message': "No problem, I'll skip that hardware assignment for now." }
             elif normalized_msg == 'new_user_upload_cancel':
+                if not _is_people_culture_member(employee_data):
+                    return jsonify({
+                        'response': PEOPLE_CULTURE_DENIED,
+                        'status': 'success',
+                        'has_employee_context': employee_data is not None,
+                        'thread_id': thread_id
+                    })
                 try:
                     # Clear any pending batch and inform the user
                     session.pop('new_user_batch', None)
@@ -1582,6 +1651,9 @@ def create_app():
                 return jsonify({'success': False, 'message': 'Not authenticated'}), 401
             if 'file' not in request.files:
                 return jsonify({'success': False, 'message': 'No file uploaded'}), 400
+            emp_ok, emp_data = employee_service.get_current_user_employee_data()
+            if not emp_ok or not _is_people_culture_member(emp_data):
+                return jsonify({'success': False, 'message': PEOPLE_CULTURE_DENIED}), 403
             file = request.files['file']
             content = file.read()
             from services.new_user_flow import parse_new_user_excel, confirmation_message

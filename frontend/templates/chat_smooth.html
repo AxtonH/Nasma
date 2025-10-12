@@ -630,6 +630,18 @@
                             <span class="font-medium">What can I do for you today?</span>
                         </h1>
                         <div class="hidden grid grid-cols-1 md:grid-cols-2 {% if is_manager %}lg:grid-cols-5{% else %}lg:grid-cols-4{% endif %} gap-3">
+                            {% if is_manager %}
+                            <div class="suggestion-card group relative rounded-xl border border-gray-200/80 bg-white/50 backdrop-blur-lg shadow-sm hover:shadow-lg transition-all duration-300 ease-in-out cursor-pointer p-4 text-center flex items-center justify-center min-h-[120px]" data-suggestion="show me my team members">
+                                <div class="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent opacity-50 group-hover:opacity-100 transition-opacity duration-300 rounded-xl"></div>
+                                <div class="relative">
+                                    <h3 class="text-lg font-semibold text-gray-800">Show my team</h3>
+                                    <p class="text-sm text-gray-500 mt-2">Preview your direct reports</p>
+                                    <div class="mt-4 flex justify-center">
+                                        <img src="/static/show-my-team.svg" alt="Show my team" class="w-12 h-12" />
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
                             <div class="suggestion-card group relative rounded-xl border border-gray-200/80 bg-white/50 backdrop-blur-lg shadow-sm hover:shadow-lg transition-all duration-300 ease-in-out cursor-pointer p-4 text-center flex items-center justify-center min-h-[120px]" data-suggestion="i want time off">
                                 <div class="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent opacity-50 group-hover:opacity-100 transition-opacity duration-300 rounded-xl"></div>
                                 <div class="relative">
@@ -672,6 +684,14 @@
                 </main>
                 <footer class="px-10 py-4 pb-4">
                     <div class="flex items-center justify-center gap-6 mb-4 overflow-x-auto -mx-2 px-2 suggestion-row" id="initialSuggestionRow">
+                        {% if is_manager %}
+                        <button class="suggestion-card card" data-suggestion="show me my team members">
+                            <div class="card-content">
+                                <div class="icon"><img src="/static/show-my-team.svg" alt="Show my team" class="w-10 h-10"/></div>
+                                <div class="label"><p>Show my team</p></div>
+                            </div>
+                        </button>
+                        {% endif %}
                         <button class="suggestion-card card" data-suggestion="i want time off">
                             <div class="card-content">
                                 <div class="icon"><img src="/static/Timeoff.svg" alt="Time off" class="w-10 h-10"/></div>
@@ -810,7 +830,6 @@
                     <div class="flex items-center justify-center gap-2 overflow-x-auto no-scrollbar pb-3 -mx-2 px-2 suggestion-row">
                         {% if is_manager %}
                         <button class="suggestion-btn suggestion-chip" data-suggestion="show me my team members">Show my team</button>
-                        <button class="suggestion-btn suggestion-chip" data-suggestion="set up new users">Set up new users</button>
                         {% endif %}
                         <button class="suggestion-btn suggestion-chip" data-suggestion="i want time off">Ask for time off</button>
                         <button class="suggestion-btn suggestion-chip" data-suggestion="Generate letters">Generate letters</button>
