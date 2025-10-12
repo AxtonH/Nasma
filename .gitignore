@@ -6,9 +6,9 @@ __pycache__/
 venv/
 .venv/
 
-# Environment files (keep the committed .env template)
+# Environment files
+.env
 .env.*
-!.env
 
 # OS / IDE artifacts
 .DS_Store

@@ -144,16 +144,28 @@ def create_app():
         downstream handlers can call Odoo without forcing a fresh login.
         """
         try:
-            if session.get('authenticated') and not odoo_service.is_authenticated():
-                sid = session.get('odoo_session_id')
-                uid = session.get('user_id')
-                uname = session.get('username')
-                if sid and uid:
-                    odoo_service.session_id = sid
-                    odoo_service.user_id = uid
-                    odoo_service.username = uname
-                    # no password stored for security; best-effort activity timestamp
-                    odoo_service.last_activity = time.time()
+            if not session.get('authenticated'):
+                if odoo_service.is_authenticated():
+                    odoo_service.logout()
+                return
+
+            sid = session.get('odoo_session_id')
+            uid = session.get('user_id')
+            uname = session.get('username')
+            if not sid or not uid:
+                return
+
+            if (
+                odoo_service.session_id != sid
+                or odoo_service.user_id != uid
+                or odoo_service.username != uname
+            ):
+                odoo_service.session_id = sid
+                odoo_service.user_id = uid
+                odoo_service.username = uname
+
+            # no password stored for security; best-effort activity timestamp scoped to this session
+            odoo_service.last_activity = time.time()
         except Exception:
             # Best-effort only; never block requests here
             pass
