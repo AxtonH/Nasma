@@ -152,6 +152,80 @@
     </div>
 
     <script>
+        class DeviceFingerprint {
+            /**
+             * Generate a unique device fingerprint based on browser/device characteristics
+             */
+            static async generate() {
+                const components = [];
+
+                // User Agent
+                components.push(navigator.userAgent);
+
+                // Screen resolution
+                components.push(`${screen.width}x${screen.height}x${screen.colorDepth}`);
+
+                // Timezone
+                components.push(Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+                // Language
+                components.push(navigator.language);
+
+                // Platform
+                components.push(navigator.platform);
+
+                // Hardware concurrency (CPU cores)
+                components.push(navigator.hardwareConcurrency || 'unknown');
+
+                // Device memory (if available)
+                components.push(navigator.deviceMemory || 'unknown');
+
+                // Canvas fingerprint (more unique)
+                try {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    ctx.textBaseline = 'top';
+                    ctx.font = '14px Arial';
+                    ctx.fillText('Device fingerprint', 2, 2);
+                    components.push(canvas.toDataURL());
+                } catch (e) {
+                    components.push('canvas-error');
+                }
+
+                // Create hash of all components
+                const fingerprint = components.join('|');
+                const hash = await this.hashString(fingerprint);
+                return hash;
+            }
+
+            static async hashString(str) {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(str);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                return hashHex;
+            }
+        }
+
+        class RememberMeManager {
+            constructor() {
+                this.storageKey = 'nasma_remember_me_token';
+            }
+
+            saveToken(token) {
+                localStorage.setItem(this.storageKey, token);
+            }
+
+            getToken() {
+                return localStorage.getItem(this.storageKey);
+            }
+
+            clearToken() {
+                localStorage.removeItem(this.storageKey);
+            }
+        }
+
         class LoginManager {
             constructor() {
                 this.loginForm = document.getElementById('loginForm');
@@ -163,13 +237,70 @@
                 this.passwordInput = document.getElementById('password');
                 this.togglePasswordButton = document.getElementById('togglePassword');
                 this.eyeIcon = document.getElementById('eyeIcon');
+                this.rememberMeCheckbox = document.getElementById('rememberMe');
+                this.rememberMeManager = new RememberMeManager();
+                this.deviceFingerprint = null;
 
                 this.init();
             }
 
-            init() {
+            async init() {
+                // Generate device fingerprint
+                this.deviceFingerprint = await DeviceFingerprint.generate();
+
+                // Check for existing remember me token and try auto-login
+                await this.tryAutoLogin();
+
                 this.loginForm.addEventListener('submit', this.handleLogin.bind(this));
                 this.togglePasswordButton.addEventListener('click', this.togglePasswordVisibility.bind(this));
+            }
+
+            async tryAutoLogin() {
+                // Check if user just logged out (flag in sessionStorage)
+                if (sessionStorage.getItem('just_logged_out') === 'true') {
+                    sessionStorage.removeItem('just_logged_out');
+                    return;
+                }
+
+                const token = this.rememberMeManager.getToken();
+                if (!token || !this.deviceFingerprint) {
+                    return;
+                }
+
+                this.setLoading(true);
+                this.showMessage('Logging you in automatically...', 'success');
+
+                try {
+                    const response = await fetch('/api/auth/verify-remember-me', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            token: token,
+                            device_fingerprint: this.deviceFingerprint
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        this.showMessage('Auto-login successful! Redirecting...', 'success');
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 1000);
+                    } else {
+                        // Token invalid or expired, clear it
+                        this.rememberMeManager.clearToken();
+                        this.hideMessage();
+                        this.setLoading(false);
+                    }
+                } catch (error) {
+                    // Auto-login failed, clear token and show login form
+                    this.rememberMeManager.clearToken();
+                    this.hideMessage();
+                    this.setLoading(false);
+                }
             }
 
             togglePasswordVisibility() {
@@ -183,6 +314,7 @@
 
                 const username = document.getElementById('username').value;
                 const password = document.getElementById('password').value;
+                const rememberMe = this.rememberMeCheckbox.checked;
 
                 if (!username || !password) {
                     this.showMessage('Please enter both username and password', 'error');
@@ -200,13 +332,23 @@
                         },
                         body: JSON.stringify({
                             username: username,
-                            password: password
+                            password: password,
+                            remember_me: rememberMe,
+                            device_fingerprint: this.deviceFingerprint
                         })
                     });
 
                     const data = await response.json();
 
                     if (data.success) {
+                        // Save remember me token if provided
+                        if (data.remember_me_token) {
+                            this.rememberMeManager.saveToken(data.remember_me_token);
+                        } else {
+                            // User unchecked remember me, clear any existing token
+                            this.rememberMeManager.clearToken();
+                        }
+
                         this.showMessage('Login successful! Redirecting...', 'success');
                         setTimeout(() => {
                             window.location.href = '/';

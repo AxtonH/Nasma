@@ -754,7 +754,7 @@
                     </div>
                 </div>
                 <div class="p-6 border-t border-gray-200/50 space-y-3" style="position: relative !important; z-index: 2147483647 !important; pointer-events: auto !important;">
-                    <button onclick="fetch('/api/auth/logout', {method: 'POST'}).then(() => window.location.href='/login').catch(() => window.location.href='/login');" class="logout-btn" style="
+                    <button onclick="fetch('/api/auth/logout', {method: 'POST', headers: {'Content-Type': 'application/json'}}).then(() => {localStorage.removeItem('nasma_remember_me_token'); sessionStorage.setItem('just_logged_out', 'true'); window.location.href='/login';}).catch(() => {localStorage.removeItem('nasma_remember_me_token'); sessionStorage.setItem('just_logged_out', 'true'); window.location.href='/login';});" class="logout-btn" style="
                         width: 100%;
                         display: flex;
                         align-items: center;
@@ -2460,16 +2460,40 @@
         // Logout buttons
         document.getElementById('logoutButton').addEventListener('click', function() {
             fetch('/api/auth/logout', {
-                method: 'POST'
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
             }).then(() => {
+                // Clear remember me token from localStorage
+                localStorage.removeItem('nasma_remember_me_token');
+                // Set flag to prevent auto-login after logout
+                sessionStorage.setItem('just_logged_out', 'true');
+                window.location.href = '/login';
+            }).catch(() => {
+                // Even if logout fails, clear tokens and redirect
+                localStorage.removeItem('nasma_remember_me_token');
+                sessionStorage.setItem('just_logged_out', 'true');
                 window.location.href = '/login';
             });
         });
 
         document.getElementById('conversationLogoutButton').addEventListener('click', function() {
             fetch('/api/auth/logout', {
-                method: 'POST'
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
             }).then(() => {
+                // Clear remember me token from localStorage
+                localStorage.removeItem('nasma_remember_me_token');
+                // Set flag to prevent auto-login after logout
+                sessionStorage.setItem('just_logged_out', 'true');
+                window.location.href = '/login';
+            }).catch(() => {
+                // Even if logout fails, clear tokens and redirect
+                localStorage.removeItem('nasma_remember_me_token');
+                sessionStorage.setItem('just_logged_out', 'true');
                 window.location.href = '/login';
             });
         });
@@ -2649,8 +2673,17 @@
             if (sidebarLogoutButton) {
                 sidebarLogoutButton.addEventListener('click', function() {
                     fetch('/api/auth/logout', {
-                        method: 'POST'
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
                     }).then(() => {
+                        localStorage.removeItem('nasma_remember_me_token');
+                        sessionStorage.setItem('just_logged_out', 'true');
+                        window.location.href = '/login';
+                    }).catch(() => {
+                        localStorage.removeItem('nasma_remember_me_token');
+                        sessionStorage.setItem('just_logged_out', 'true');
                         window.location.href = '/login';
                     });
                 });
@@ -2751,9 +2784,22 @@
                 logoutBtn.addEventListener('click', function(e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    fetch('/api/auth/logout', { method: 'POST' })
-                        .then(() => { window.location.href = '/login'; })
-                        .catch(() => { window.location.href = '/login'; });
+                    fetch('/api/auth/logout', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    })
+                        .then(() => {
+                            localStorage.removeItem('nasma_remember_me_token');
+                            sessionStorage.setItem('just_logged_out', 'true');
+                            window.location.href = '/login';
+                        })
+                        .catch(() => {
+                            localStorage.removeItem('nasma_remember_me_token');
+                            sessionStorage.setItem('just_logged_out', 'true');
+                            window.location.href = '/login';
+                        });
                 });
             } else {
                 console.error('logoutBtn not found!');
@@ -2772,9 +2818,22 @@
                         transitionToInitial();
                         currentThreadId = null;
                     } else if (target.id === 'logoutBtn') {
-                        fetch('/api/auth/logout', { method: 'POST' })
-                            .then(() => { window.location.href = '/login'; })
-                            .catch(() => { window.location.href = '/login'; });
+                        fetch('/api/auth/logout', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            }
+                        })
+                            .then(() => {
+                                localStorage.removeItem('nasma_remember_me_token');
+                                sessionStorage.setItem('just_logged_out', 'true');
+                                window.location.href = '/login';
+                            })
+                            .catch(() => {
+                                localStorage.removeItem('nasma_remember_me_token');
+                                sessionStorage.setItem('just_logged_out', 'true');
+                                window.location.href = '/login';
+                            });
                     }
                 });
             }

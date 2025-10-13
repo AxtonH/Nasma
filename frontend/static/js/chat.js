@@ -670,9 +670,9 @@ class ChatBot {
     handleButtonClick(value, type) {
         console.log('Button clicked:', { value, type });
 
-        if (type === 'leave_type_selection') {
+        if (type === 'leave_type_selection' || type === 'sick_leave_mode' || type === 'confirmation_choice') {
             // Disable all buttons after selection to prevent double-clicks
-            const buttons = document.querySelectorAll('.btn-leave-type');
+            const buttons = document.querySelectorAll('.btn-leave-type, .choice-button');
             buttons.forEach(btn => {
                 btn.disabled = true;
                 btn.style.opacity = '0.5';
@@ -958,16 +958,28 @@ class ChatBot {
     
     async logout() {
         try {
+            // Generate device fingerprint to clear remember me token
+            const deviceFingerprint = await this.generateDeviceFingerprint();
+
             const response = await fetch('/api/auth/logout', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                }
+                },
+                body: JSON.stringify({
+                    device_fingerprint: deviceFingerprint
+                })
             });
 
             const data = await response.json();
 
             if (data.success) {
+                // Clear remember me token from localStorage
+                localStorage.removeItem('nasma_remember_me_token');
+
+                // Set flag to prevent auto-login after logout
+                sessionStorage.setItem('just_logged_out', 'true');
+
                 // Redirect to login page
                 window.location.href = '/login';
             } else {
@@ -977,6 +989,36 @@ class ChatBot {
             console.error('Logout error:', error);
             alert('Logout failed. Please try again.');
         }
+    }
+
+    async generateDeviceFingerprint() {
+        const components = [];
+        components.push(navigator.userAgent);
+        components.push(`${screen.width}x${screen.height}x${screen.colorDepth}`);
+        components.push(Intl.DateTimeFormat().resolvedOptions().timeZone);
+        components.push(navigator.language);
+        components.push(navigator.platform);
+        components.push(navigator.hardwareConcurrency || 'unknown');
+        components.push(navigator.deviceMemory || 'unknown');
+
+        try {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.textBaseline = 'top';
+            ctx.font = '14px Arial';
+            ctx.fillText('Device fingerprint', 2, 2);
+            components.push(canvas.toDataURL());
+        } catch (e) {
+            components.push('canvas-error');
+        }
+
+        const fingerprint = components.join('|');
+        const encoder = new TextEncoder();
+        const data = encoder.encode(fingerprint);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        return hashHex;
     }
     
     // Debug methods

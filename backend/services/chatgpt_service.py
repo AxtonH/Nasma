@@ -725,7 +725,9 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 return self._start_timeoff_session(message, thread_id, extracted_data if is_timeoff else {}, employee_data)
 
             # If this is a new time-off request (high confidence)
-            if is_timeoff and confidence >= 0.7:
+            # BUT: Skip restart if this is a button payload (SICK_FULL_DAYS, SICK_CUSTOM_HOURS, etc)
+            is_button_payload = message.strip().upper() in ['SICK_FULL_DAYS', 'SICK_CUSTOM_HOURS', 'YES', 'NO', 'CONFIRM', 'CANCEL']
+            if is_timeoff and confidence >= 0.7 and not is_button_payload:
                 # Always start a fresh time-off flow on explicit start phrases to avoid bleeding states
                 debug_log(f"High confidence time-off intent detected ({confidence:.2f}); forcing a clean start.", "bot_logic")
                 try:
@@ -971,6 +973,14 @@ Be thorough and informative while maintaining clarity and accuracy."""
                             self._persist_timeoff_context(thread_id, session, start_date=start_date, end_date=end_date)
                             self.session_manager.advance_session_step(thread_id)
 
+                            # Enforce Sick Leave mode choice before confirmation
+                            try:
+                                mt_name_cf = (matched_type.get('name') or '').strip()
+                            except Exception:
+                                mt_name_cf = ''
+                            if mt_name_cf == 'Sick Leave' and not session.get('sick_leave_mode'):
+                                return self._prompt_sick_leave_mode(thread_id)
+
                             def dd_slash_mm_yyyy(d: str) -> str:
                                 try:
                                     return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
@@ -984,7 +994,13 @@ Be thorough and informative while maintaining clarity and accuracy."""
                             response_text += "Do you want to submit this request? Reply with 'yes' to confirm or 'no' to cancel."
                             return self._create_response(response_text, thread_id)
 
-                        # Otherwise, ask for both dates in a single message
+                        # Otherwise, first ask Sick Leave mode if applicable; else show date picker
+                        try:
+                            mt_name = (matched_type.get('name') or '').strip()
+                        except Exception:
+                            mt_name = ''
+                        if mt_name == 'Sick Leave' and not session.get('sick_leave_mode'):
+                            return self._prompt_sick_leave_mode(thread_id)
                         response_text = (
                             f"I'll help you request {matched_type['name']}. \n\n"
                             "You can pick dates from the calendar below or type them. Examples:\n"
@@ -1166,6 +1182,96 @@ Be thorough and informative while maintaining clarity and accuracy."""
             if step <= 1:  # Waiting for leave type selection
                 return self._handle_leave_type_selection(message, thread_id, session, employee_data)
             elif step == 2:  # Waiting for date range (start and end in one message)
+                # Insert Sick Leave mode choice (Full Days vs Custom Hours) BEFORE date step
+                try:
+                    sd = session.get('data', {}) if isinstance(session, dict) else {}
+                    selected_type = sd.get('selected_leave_type') or session.get('selected_leave_type') or {}
+                    selected_name = (selected_type.get('name') or '').strip()
+                    ctx_mode = (sd.get('timeoff_context', {}) or {}).get('sick_leave_mode')
+                    mode_top = session.get('sick_leave_mode')
+                    current_mode = ctx_mode or mode_top
+                except Exception:
+                    selected_name = ''
+                    current_mode = None
+
+                # Handle response to the Sick Leave mode buttons
+                try:
+                    ml_raw = (message or '').strip()
+                    # Normalize whitespace variants (space, NBSP, thin space) and collapse
+                    ml_ws = ml_raw.replace('\u00A0', ' ').replace('\u2007', ' ').replace('\u202F', ' ')
+                    import re as _re_norm
+                    ml_ws = _re_norm.sub(r"\s+", " ", ml_ws).strip()
+                    ml = ml_ws.lower()
+                    awaiting_mode = (selected_name == 'Sick Leave') and not bool(current_mode)
+                    # Accept explicit widget payload format: sick_leave_mode=VALUE
+                    if selected_name == 'Sick Leave' and awaiting_mode and ml.startswith('sick_leave_mode='):
+                        val = ml_raw.split('=', 1)[1].strip()
+                        if val.upper() == 'SICK_FULL_DAYS':
+                            self.session_manager.update_session(thread_id, {'sick_leave_mode': 'full_days'})
+                            self._persist_timeoff_context(thread_id, session, sick_leave_mode='full_days')
+                            guidance = (
+                                "Great, we will request Sick Leave for full days. "
+                                "Please send both dates in one message, for example '15/10/2025 to 16/10/2025'."
+                            )
+                            return self._create_response_with_datepicker(guidance, thread_id)
+                        elif val.upper() == 'SICK_CUSTOM_HOURS':
+                            self.session_manager.update_session(thread_id, {'sick_leave_mode': 'custom_hours'})
+                            self._persist_timeoff_context(thread_id, session, sick_leave_mode='custom_hours')
+                            # Proceed to single-date picker for Sick Leave Custom Hours
+                            guidance = (
+                                "Great, we will request Sick Leave for custom hours. \n\n"
+                                "Pick your date from the calendar below or type it (single day only). Examples:\n"
+                                "- 23/9\n"
+                                "- 23/09/2025\n"
+                                "- next Monday\n\n"
+                                "Defaults: I assume DD/MM, current month and year unless you specify otherwise."
+                            )
+                            return self._create_response_with_datepicker_single(guidance, thread_id)
+                    # Normalize common variants users/typeahead may send
+                    # Flexible matching (words can be joined or separated by any space/hyphen)
+                    is_full_days = (
+                        ml == 'full days' or ml == 'fulldays' or ml == 'full-day' or
+                        bool(_re_norm.search(r"\bfull\s*[- ]?\s*days\b", ml)) or ml_raw == 'SICK_FULL_DAYS'
+                    )
+                    is_custom_hours = (
+                        ml == 'custom hours' or ml == 'custom-hours' or ml == 'custom hour' or
+                        bool(_re_norm.search(r"\bcustom\s*[- ]?\s*hours?\b", ml)) or ml_raw == 'SICK_CUSTOM_HOURS'
+                    )
+                    if selected_name == 'Sick Leave' and awaiting_mode and (is_full_days or is_custom_hours):
+                        if is_full_days:
+                            # Store mode and proceed to date picker
+                            debug_log(f"Sick Leave mode selected: Full Days (raw: {ml_raw})", "bot_logic")
+                            self.session_manager.update_session(thread_id, {'sick_leave_mode': 'full_days'})
+                            self._persist_timeoff_context(thread_id, session, sick_leave_mode='full_days')
+                            guidance = (
+                                "Great, we will request Sick Leave for full days. "
+                                "Please send both dates in one message, for example '15/10/2025 to 16/10/2025'."
+                            )
+                            return self._create_response_with_datepicker(guidance, thread_id)
+                        else:
+                            # Custom Hours mode selected
+                            debug_log(f"Sick Leave mode selected: Custom Hours (raw: {ml_raw})", "bot_logic")
+                            self.session_manager.update_session(thread_id, {'sick_leave_mode': 'custom_hours'})
+                            self._persist_timeoff_context(thread_id, session, sick_leave_mode='custom_hours')
+                            # Proceed to single-date picker for Sick Leave Custom Hours
+                            guidance = (
+                                "Great, we will request Sick Leave for custom hours. \n\n"
+                                "Pick your date from the calendar below or type it (single day only). Examples:\n"
+                                "- 23/9\n"
+                                "- 23/09/2025\n"
+                                "- next Monday\n\n"
+                                "Defaults: I assume DD/MM, current month and year unless you specify otherwise."
+                            )
+                            return self._create_response_with_datepicker_single(guidance, thread_id)
+                except Exception as e:
+                    debug_log(f"Error handling Sick Leave mode selection: {e}", "general")
+                    import traceback
+                    traceback.print_exc()
+
+                # If Sick Leave and mode not chosen yet, prompt user for mode
+                if selected_name == 'Sick Leave' and not (current_mode):
+                    return self._prompt_sick_leave_mode(thread_id)
+
                 # Safety: if no leave type was selected (e.g., residue from a previous flow), reset to step 1
                 try:
                     sd = session.get('data', {}) if isinstance(session, dict) else {}
@@ -1252,6 +1358,24 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 existing_start = ctx.get('start_date')
                 existing_end = ctx.get('end_date')
                 if existing_start and existing_end:
+                    # If Sick Leave, enforce mode prompt before confirmation
+                    try:
+                        sel_name = (selected_type.get('name') or '').strip()
+                    except Exception:
+                        sel_name = ''
+                    if sel_name == 'Sick Leave' and not session.get('sick_leave_mode'):
+                        try:
+                            self.session_manager.update_session(
+                                thread_id,
+                                {
+                                    'selected_leave_type': selected_type,
+                                    'step': 2
+                                }
+                            )
+                        except Exception:
+                            pass
+                        self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type)
+                        return self._prompt_sick_leave_mode(thread_id)
                     try:
                         self.session_manager.update_session(
                             thread_id,
@@ -1291,10 +1415,16 @@ Be thorough and informative while maintaining clarity and accuracy."""
                         {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
                     ]
                     return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
-                # Otherwise, proceed to date collection
+                # Otherwise, proceed to next step (for Sick Leave: ask mode first)
                 self.session_manager.update_session(thread_id, {'selected_leave_type': selected_type})
                 self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type)
                 self.session_manager.advance_session_step(thread_id)
+                try:
+                    sel_name2 = (selected_type.get('name') or '').strip()
+                except Exception:
+                    sel_name2 = ''
+                if sel_name2 == 'Sick Leave' and not session.get('sick_leave_mode'):
+                    return self._prompt_sick_leave_mode(thread_id)
                 response_text = f"Great! You've selected {selected_type['name']}. \n\nYou can pick dates from the calendar below or type them. Examples:\n- 23/9 to 24/9\n- 23/09/2025 to 24/09/2025\n- 23-9-2025 till 24-9-2025\n- 23rd of September till the 24th\n- next Monday to Wednesday\n\nDefaults: I assume DD/MM, current month and year unless you specify otherwise."
                 return self._create_response_with_datepicker(response_text, thread_id)
         except ValueError:
@@ -1331,6 +1461,24 @@ Be thorough and informative while maintaining clarity and accuracy."""
             existing_start = ctx.get('start_date')
             existing_end = ctx.get('end_date')
             if existing_start and existing_end:
+                # If Sick Leave, enforce mode prompt before confirmation
+                try:
+                    bm_name = (best_match.get('name') or '').strip()
+                except Exception:
+                    bm_name = ''
+                if bm_name == 'Sick Leave' and not session.get('sick_leave_mode'):
+                    try:
+                        self.session_manager.update_session(
+                            thread_id,
+                            {
+                                'selected_leave_type': best_match,
+                                'step': 2
+                            }
+                        )
+                    except Exception:
+                        pass
+                    self._persist_timeoff_context(thread_id, session, selected_leave_type=best_match)
+                    return self._prompt_sick_leave_mode(thread_id)
                 try:
                     self.session_manager.update_session(
                         thread_id,
@@ -1370,7 +1518,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 ]
                 return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
 
-            # Otherwise, proceed to collect dates
+            # Otherwise, proceed to next step (for Sick Leave: ask mode first)
             self.session_manager.update_session(thread_id, {'selected_leave_type': best_match})
             self._persist_timeoff_context(thread_id, session, selected_leave_type=best_match)
             self.session_manager.advance_session_step(thread_id)
@@ -1394,6 +1542,12 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 )
                 return self._create_response_with_datepicker_single(response_text, thread_id)
             else:
+                try:
+                    bm_name2 = (best_match.get('name') or '').strip()
+                except Exception:
+                    bm_name2 = ''
+                if bm_name2 == 'Sick Leave' and not session.get('sick_leave_mode'):
+                    return self._prompt_sick_leave_mode(thread_id)
                 response_text = (
                     f"Perfect! You've selected {best_match['name']}. \n\nYou can pick dates from the calendar below or type them. Examples:\n"
                     "- 23/9 to 24/9\n"
@@ -1590,9 +1744,19 @@ Be thorough and informative while maintaining clarity and accuracy."""
         except Exception:
             pass
 
-        # Detect if current flow is Half Days to enforce single-day constraint
+        # Detect if current flow is Half Days or Sick Leave Custom Hours to enforce single-day constraint
         session_data_for_type = session.get('data', {})
         selected_type_for_validation = session_data_for_type.get('selected_leave_type') or session.get('selected_leave_type', {})
+        
+        # Check if this is Sick Leave Custom Hours mode
+        is_sick_custom_hours = False
+        try:
+            selected_name_check = (selected_type_for_validation.get('name') or '').strip()
+            sick_mode = session_data_for_type.get('sick_leave_mode') or session.get('sick_leave_mode')
+            is_sick_custom_hours = (selected_name_check == 'Sick Leave' and sick_mode == 'custom_hours')
+        except Exception:
+            is_sick_custom_hours = False
+        
         is_halfday_flow = False
         try:
             if self.halfday_service and isinstance(selected_type_for_validation, dict):
@@ -1601,6 +1765,9 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 )
         except Exception:
             is_halfday_flow = False
+        
+        # Treat Sick Leave Custom Hours like halfday flow (single date + hours)
+        is_single_date_flow = is_halfday_flow or is_sick_custom_hours
 
         # Accept widget format strictly first: "DD/MM/YYYY to DD/MM/YYYY"
         try:
@@ -1623,15 +1790,13 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 # widget-provided format is valid; trust it and store
                 start_date = _dt.strptime(a, '%d/%m/%Y').strftime('%Y-%m-%d')
                 end_date = _dt.strptime(b, '%d/%m/%Y').strftime('%Y-%m-%d')
-                if is_halfday_flow and start_date != end_date:
+                if is_single_date_flow and start_date != end_date:
                     try:
                         self.session_manager.update_session(thread_id, {'step': 2})
                     except Exception:
                         pass
-                    return self._create_response_with_datepicker_single(
-                        "Custom Hours are limited to one day. Please pick a single date.",
-                        thread_id
-                    )
+                    msg = "Custom Hours are limited to one day. Please pick a single date." if is_halfday_flow else "Sick Leave Custom Hours are limited to one day. Please pick a single date."
+                    return self._create_response_with_datepicker_single(msg, thread_id)
                 self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
                 self.session_manager.advance_session_step(thread_id)
                 try:
@@ -1655,7 +1820,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
                         return _dt.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
                     except Exception:
                         return d
-                if is_halfday_flow:
+                if is_single_date_flow:
                     hour_text = (
                         "Great, got your date. Please choose your hours (from/to)."
                     )
@@ -1677,12 +1842,10 @@ Be thorough and informative while maintaining clarity and accuracy."""
         result = self.timeoff_service.parse_date_range(message)
         if result:
             start_date, end_date = result
-            # If Half Day flow, only allow single day
-            if is_halfday_flow and start_date != end_date:
-                response_text = (
-                    "For Half Days, you can only select one day. Please pick a single date."
-                )
-                return self._create_response_with_datepicker_single(response_text, thread_id)
+            # If single-date flow (Half Day or Sick Custom Hours), only allow single day
+            if is_single_date_flow and start_date != end_date:
+                msg = "For Half Days, you can only select one day. Please pick a single date." if is_halfday_flow else "For Sick Leave Custom Hours, you can only select one day. Please pick a single date."
+                return self._create_response_with_datepicker_single(msg, thread_id)
             # Validate chronological order (already ensured) and store
             self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
             self.session_manager.advance_session_step(thread_id)
@@ -1717,8 +1880,8 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
                 except Exception:
                     return d
-            if is_halfday_flow:
-                # After selecting the date for Half Days, ask for hour range
+            if is_single_date_flow:
+                # After selecting the date for single-date flows (Half Days or Sick Custom Hours), ask for hour range
                 hour_text = (
                     "Great, got your date. Please choose your hours (from/to)."
                 )
@@ -1771,7 +1934,7 @@ Be thorough and informative while maintaining clarity and accuracy."""
                         return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
                     except Exception:
                         return d
-                if is_halfday_flow:
+                if is_single_date_flow:
                     hour_text = (
                         "Great, got your date. Please choose your hours (from/to)."
                     )
@@ -2031,8 +2194,17 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     except Exception:
                         pass
 
+                    # Determine display name for leave type
+                    leave_type_name = selected_type.get('name', 'Custom Hours')
+                    try:
+                        sick_mode_check = session_data.get('sick_leave_mode') or session.get('sick_leave_mode')
+                        if leave_type_name == 'Sick Leave' and sick_mode_check == 'custom_hours':
+                            leave_type_name = 'Sick Leave (Custom Hours)'
+                    except Exception:
+                        pass
+                    
                     response_text = f"Great, noted your hours. Here's your time-off request summary:\n\n"
-                    response_text += f"📋 **Leave Type:** {selected_type.get('name', 'Custom Hours')}\n"
+                    response_text += f"📋 **Leave Type:** {leave_type_name}\n"
                     response_text += f"📅 **Date:** {dd_mm_yyyy(start_date)}\n"
                     response_text += f"⏰ **Hours:** from {self._format_hour_label(raw_from)} to {self._format_hour_label(raw_to)}\n"
                     response_text += f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
@@ -2045,9 +2217,9 @@ Be thorough and informative while maintaining clarity and accuracy."""
             except Exception:
                 pass
 
-            # Half Day UX: if invalid hour range (e.g., same start/end) or unparsed text, re-open the hour picker
+            # Single-date flow UX: if invalid hour range (e.g., same start/end) or unparsed text, re-open the hour picker
             try:
-                if self._is_halfday_flow(session):
+                if self._is_halfday_flow(session) or self._is_sick_custom_hours_flow(session):
                     hour_text = (
                         "Please choose a valid hours range (end must be after start)."
                     )
@@ -2171,18 +2343,37 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 debug_log(f"Missing required data - employee_id: {employee_id}, leave_type_id: {leave_type_id}, start_date: {start_date}, end_date: {end_date}", "general")
                 raise ValueError("Missing required data for submission")
             
-            # Support Half Day custom hours via modular service and hour range fields
+            # Support Half Day custom hours and Sick Leave Custom Hours via modular service and hour range fields
             extra_fields = {}
-            if self.halfday_service and isinstance(selected_type, dict):
-                try:
-                    mapped_leave_type_id, hd_extra = self.halfday_service.build_submission(selected_type)
-                    if mapped_leave_type_id:
-                        leave_type_id = mapped_leave_type_id
-                    if hd_extra:
-                        extra_fields.update(hd_extra)
-                except Exception as hd_map_e:
-                    debug_log(f"HalfDay build_submission error: {hd_map_e}", "general")
-                # Add hour range if present in session
+            
+            # Check if this is Sick Leave Custom Hours mode
+            is_sick_custom = False
+            try:
+                selected_name_sub = (selected_type.get('name') or '').strip()
+                sick_mode_sub = session_data.get('sick_leave_mode') or session.get('sick_leave_mode')
+                is_sick_custom = (selected_name_sub == 'Sick Leave' and sick_mode_sub == 'custom_hours')
+            except Exception:
+                is_sick_custom = False
+            
+            # Handle halfday service or Sick Leave Custom Hours
+            if (self.halfday_service and isinstance(selected_type, dict)) or is_sick_custom:
+                # Only map leave type ID for halfday service (not for Sick Leave Custom Hours)
+                if self.halfday_service and isinstance(selected_type, dict) and not is_sick_custom:
+                    try:
+                        mapped_leave_type_id, hd_extra = self.halfday_service.build_submission(selected_type)
+                        if mapped_leave_type_id:
+                            leave_type_id = mapped_leave_type_id
+                        if hd_extra:
+                            extra_fields.update(hd_extra)
+                    except Exception as hd_map_e:
+                        debug_log(f"HalfDay build_submission error: {hd_map_e}", "general")
+                
+                # For Sick Leave Custom Hours, enable the Custom Hours option in Odoo
+                if is_sick_custom:
+                    extra_fields['request_unit_hours'] = True
+                    debug_log("Sick Leave Custom Hours: setting request_unit_hours=True", "bot_logic")
+                
+                # Add hour range if present in session (for both halfday and Sick Leave Custom Hours)
                 sd = session.get('data', {})
                 hour_from = sd.get('hour_from') or session.get('hour_from') or context_data.get('hour_from')
                 hour_to = sd.get('hour_to') or session.get('hour_to') or context_data.get('hour_to')
@@ -2313,6 +2504,34 @@ Be thorough and informative while maintaining clarity and accuracy."""
         debug_log(f"Response object with {len(buttons)} buttons created successfully", "bot_logic")
         return result
 
+    def _create_response_with_choice_buttons(self, message_text: str, thread_id: str,
+                                             buttons: list) -> dict:
+        """Create a response with explicit buttons, each a dict with text/value/type."""
+        debug_log(f"Creating response with choice buttons - count: {len(buttons) if buttons else 0}", "bot_logic")
+        if not thread_id:
+            import time
+            thread_id = f"timeoff_{int(time.time())}"
+        return {
+            'message': message_text,
+            'thread_id': thread_id,
+            'source': self.model,
+            'confidence_score': 1.0,
+            'model_used': self.model,
+            'session_handled': True,
+            'buttons': buttons
+        }
+
+    def _prompt_sick_leave_mode(self, thread_id: str, prefix_note: str = "") -> dict:
+        """Prompt user to pick Sick Leave mode: Full Days vs Custom Hours (distinct from leave type)."""
+        text = (
+            (prefix_note + "\n\n") if prefix_note else ""
+        ) + "For Sick Leave, do you want to take Full Days or Custom Hours?"
+        buttons = [
+            {'text': 'Full Days', 'value': 'SICK_FULL_DAYS', 'type': 'sick_leave_mode'},
+            {'text': 'Custom Hours', 'value': 'SICK_CUSTOM_HOURS', 'type': 'sick_leave_mode'}
+        ]
+        return self._create_response_with_choice_buttons(text, thread_id, buttons)
+
     def _create_response_with_datepicker(self, message_text: str, thread_id: str) -> dict:
         """Create a response object that instructs the UI to show a date range picker widget"""
         debug_log(f"Creating response with datepicker - message length: {len(message_text) if message_text else 0}", "bot_logic")
@@ -2411,6 +2630,17 @@ Be thorough and informative while maintaining clarity and accuracy."""
         except Exception:
             return False
         return False
+    
+    def _is_sick_custom_hours_flow(self, session: dict) -> bool:
+        """Check if current flow is Sick Leave Custom Hours mode."""
+        session_data = session.get('data', {}) if isinstance(session, dict) else {}
+        selected_type = session_data.get('selected_leave_type') or session.get('selected_leave_type', {})
+        try:
+            selected_name = (selected_type.get('name') or '').strip()
+            sick_mode = session_data.get('sick_leave_mode') or session.get('sick_leave_mode')
+            return selected_name == 'Sick Leave' and sick_mode == 'custom_hours'
+        except Exception:
+            return False
 
     def _format_hour_label(self, value: str) -> str:
         """Format a float-like string hour value to 12-hour label (e.g., '8.5' -> '8:30 AM')."""

@@ -12,6 +12,7 @@ try:
     from .config.settings import Config
     from .services.intent_service import IntentService
     from .services.overtime_service import OvertimeService
+    from .services.remember_me_service import RememberMeService
     from .services.manager_helper import (
         get_team_overview,
         format_team_overview_message,
@@ -31,6 +32,7 @@ except Exception:
     from config.settings import Config
     from services.intent_service import IntentService
     from services.overtime_service import OvertimeService
+    from services.remember_me_service import RememberMeService
     from services.manager_helper import (
         get_team_overview,
         format_team_overview_message,
@@ -137,6 +139,7 @@ def create_app():
     document_service = DocumentService(odoo_service, employee_service)
     intent_service = IntentService()
     overtime_service = OvertimeService(odoo_service, employee_service, session_manager)
+    remember_me_service = RememberMeService()
     
     # Import and initialize reimbursement service (support package/local)
     try:
@@ -303,16 +306,18 @@ def create_app():
             data = request.get_json()
             username = data.get('username', '')
             password = data.get('password', '')
-            
+            remember_me = data.get('remember_me', False)
+            device_fingerprint = data.get('device_fingerprint', '')
+
             if not username or not password:
                 return jsonify({
                     'success': False,
                     'message': 'Username and password are required'
                 }), 400
-            
+
             # Authenticate with Odoo
             success, message = odoo_service.authenticate(username, password)
-            
+
             if success:
                 # Store authentication in session (without password for security)
                 session.permanent = True  # Enable session timeout
@@ -322,30 +327,117 @@ def create_app():
                 # Persist Odoo web session id for rehydration across reloads
                 session['odoo_session_id'] = odoo_service.session_id
                 # Note: Not storing password in session for security reasons
-                
+
                 debug_log(f"Authentication successful for {username}", "bot_logic")
                 debug_log(f"Session stored: {dict(session)}", "bot_logic")
-                
-                return jsonify({
+
+                response_data = {
                     'success': True,
                     'message': message,
                     'user_info': odoo_service.get_user_info()
-                })
+                }
+
+                # Handle remember me functionality
+                if remember_me and device_fingerprint:
+                    try:
+                        token = remember_me_service.create_token(
+                            username=username,
+                            password=password,
+                            device_fingerprint=device_fingerprint,
+                            days_valid=30
+                        )
+                        response_data['remember_me_token'] = token
+                        debug_log(f"Remember me token created for {username} on device {device_fingerprint[:8]}...", "bot_logic")
+                    except Exception as e:
+                        debug_log(f"Failed to create remember me token: {str(e)}", "bot_logic")
+
+                return jsonify(response_data)
             else:
                 return jsonify({
                     'success': False,
                     'message': message
                 }), 401
-                
+
         except Exception as e:
             return jsonify({
                 'success': False,
                 'message': f'Authentication error: {str(e)}'
             }), 500
     
+    @app.route('/api/auth/verify-remember-me', methods=['POST'])
+    def verify_remember_me():
+        """Verify remember me token and auto-login if valid"""
+        try:
+            data = request.get_json()
+            token = data.get('token', '')
+            device_fingerprint = data.get('device_fingerprint', '')
+
+            if not token or not device_fingerprint:
+                return jsonify({
+                    'success': False,
+                    'message': 'Token and device fingerprint are required'
+                }), 400
+
+            # Verify token and get credentials
+            credentials = remember_me_service.verify_token(token, device_fingerprint)
+
+            if credentials:
+                username, password = credentials
+
+                # Authenticate with Odoo
+                success, message = odoo_service.authenticate(username, password)
+
+                if success:
+                    # Store authentication in session
+                    session.permanent = True
+                    session['authenticated'] = True
+                    session['username'] = username
+                    session['user_id'] = odoo_service.user_id
+                    session['odoo_session_id'] = odoo_service.session_id
+
+                    debug_log(f"Auto-login successful for {username} via remember me token", "bot_logic")
+
+                    return jsonify({
+                        'success': True,
+                        'message': 'Auto-login successful',
+                        'user_info': odoo_service.get_user_info()
+                    })
+
+            return jsonify({
+                'success': False,
+                'message': 'Invalid or expired token'
+            }), 401
+
+        except Exception as e:
+            debug_log(f"Remember me verification error: {str(e)}", "bot_logic")
+            return jsonify({
+                'success': False,
+                'message': 'Verification error'
+            }), 500
+
     @app.route('/api/auth/logout', methods=['POST'])
     def auth_logout():
         try:
+            # Get device fingerprint to clear remember me token
+            # Handle both JSON and non-JSON requests
+            device_fingerprint = ''
+            try:
+                data = request.get_json(silent=True) or {}
+                device_fingerprint = data.get('device_fingerprint', '')
+            except Exception:
+                # If JSON parsing fails, that's okay - logout should still work
+                pass
+
+            username = session.get('username', '')
+
+            # Clear remember me token if device fingerprint provided
+            if username and device_fingerprint:
+                try:
+                    remember_me_service.remove_token(username, device_fingerprint)
+                    debug_log(f"Removed remember me token for {username} on device {device_fingerprint[:8]}...", "bot_logic")
+                except Exception as e:
+                    debug_log(f"Failed to remove remember me token: {str(e)}", "bot_logic")
+
             # Clear session
             # Clear session data
             session.pop('authenticated', None)
@@ -354,13 +446,14 @@ def create_app():
             session.pop('odoo_session_id', None)
             # Note: No password to clear since we don't store it anymore
             odoo_service.logout()
-            
+
             return jsonify({
                 'success': True,
                 'message': 'Logged out successfully'
             })
-            
+
         except Exception as e:
+            debug_log(f"Logout error: {str(e)}", "bot_logic")
             return jsonify({
                 'success': False,
                 'message': f'Logout error: {str(e)}'
