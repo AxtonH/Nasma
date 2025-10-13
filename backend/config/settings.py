@@ -41,6 +41,9 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
     DEBUG = _to_bool(os.environ.get('FLASK_DEBUG'), default=False)
     PERMANENT_SESSION_LIFETIME = 3600  # 1 hour in seconds
+    # Cookie settings for cross-site usage
+    SESSION_COOKIE_SAMESITE = 'None'
+    SESSION_COOKIE_SECURE = True
     
     # Odoo Configuration
     ODOO_URL = os.environ.get("ODOO_URL", "https://prezlab-staging-23183574.dev.odoo.com")
