@@ -460,18 +460,24 @@ class DocumentService:
         self.template_ar_male = os.path.join(templates_root, "Employment Letter - ARABIC - Male.docx")
         self.template_ar_female = os.path.join(templates_root, "Employment Letter - ARABIC - Female.docx")
 
+        # Generic templates (fallbacks when gender is not available)
+        self.template_generic_en = os.path.join(templates_root, "Employment Letter .docx")
+        self.template_generic_ar = os.path.join(templates_root, "Employment Letter - ARABIC.docx")
+
         # Downloads directory inside frontend static folder
         self.downloads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'static', 'downloads', 'employment_letters'))
         
         # Embassy letter templates (English)
         self.template_embassy_male = os.path.join(templates_root, "Employment Letter to Embassies - Male.docx")
         self.template_embassy_female = os.path.join(templates_root, "Employment Letter to Embassies - Female.docx")
+        self.template_embassy_generic = os.path.join(templates_root, "Employment Letter to Embassies.docx")
         # Embassy letters downloads directory
         self.embassy_downloads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'static', 'downloads', 'embassy_letters'))
 
         # Experience letter templates (English)
         self.template_experience_male = os.path.join(templates_root, "Experience Letter - Male.docx")
         self.template_experience_female = os.path.join(templates_root, "Experience Letter - Female.docx")
+        self.template_experience_generic = os.path.join(templates_root, "Experience Letter.docx")
         # Experience letters downloads directory
         self.experience_downloads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'static', 'downloads', 'experience_letters'))
 
@@ -599,16 +605,27 @@ class DocumentService:
             return False, f'Failed to read company fields: {comp_read}'
         company = comp_read[0] if isinstance(comp_read, list) else comp_read
 
-        # Choose template based on gender and language, with fallback to custom rf gender
+        # Choose template based on gender and language; use generic fallback when gender missing/unknown
         gender_raw = (employee.get('gender') or '').strip()
         if not gender_raw:
             gender_raw = str(employee.get('x_studio_rf_gender') or '').strip()
         gender = gender_raw.lower()
         is_female = gender.startswith('f')
+        is_male = gender.startswith('m')
         if (lang or 'en').lower().startswith('ar'):
-            template_path = self.template_ar_female if is_female else self.template_ar_male
+            if is_female:
+                template_path = self.template_ar_female
+            elif is_male:
+                template_path = self.template_ar_male
+            else:
+                template_path = self.template_generic_ar
         else:
-            template_path = self.template_female if is_female else self.template_male
+            if is_female:
+                template_path = self.template_female
+            elif is_male:
+                template_path = self.template_male
+            else:
+                template_path = self.template_generic_en
         if not os.path.exists(template_path):
             return False, f'Template not found: {template_path}'
 
@@ -736,13 +753,19 @@ class DocumentService:
             return False, f'Failed to read company fields: {comp_read}'
         company = comp_read[0] if isinstance(comp_read, list) else comp_read
 
-        # Choose template based on gender (English) with fallback
+        # Choose template by gender with generic fallback when gender missing/unknown
         gender_raw = (employee.get('gender') or '').strip()
         if not gender_raw:
             gender_raw = str(employee.get('x_studio_rf_gender') or '').strip()
         gender = gender_raw.lower()
         is_female = gender.startswith('f')
-        template_path = self.template_experience_female if is_female else self.template_experience_male
+        is_male = gender.startswith('m')
+        if is_female:
+            template_path = self.template_experience_female
+        elif is_male:
+            template_path = self.template_experience_male
+        else:
+            template_path = self.template_experience_generic
         if not os.path.exists(template_path):
             return False, f'Template not found: {template_path}'
 
@@ -812,13 +835,19 @@ class DocumentService:
             return False, f'Failed to read company fields: {comp_read}'
         company = comp_read[0] if isinstance(comp_read, list) else comp_read
 
-        # Choose template by gender (English) with fallback
+        # Choose template by gender with generic fallback when gender missing/unknown
         gender_raw = (employee.get('gender') or '').strip()
         if not gender_raw:
             gender_raw = str(employee.get('x_studio_rf_gender') or '').strip()
         gender = gender_raw.lower()
         is_female = gender.startswith('f')
-        template_path = self.template_embassy_female if is_female else self.template_embassy_male
+        is_male = gender.startswith('m')
+        if is_female:
+            template_path = self.template_embassy_female
+        elif is_male:
+            template_path = self.template_embassy_male
+        else:
+            template_path = self.template_embassy_generic
         if not os.path.exists(template_path):
             return False, f'Template not found: {template_path}'
 
