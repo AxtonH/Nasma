@@ -626,7 +626,7 @@
                             </div>
                         </div>
                         <h1 class="text-4xl font-semibold text-gray-900 tracking-tighter mb-4" style="font-family: 'Poppins', sans-serif;">
-                            Hey Prezlaber!<br>
+                            Hey <span id="greetingName">Prezlaber</span>!<br>
                             <span class="font-medium">What can I do for you today?</span>
                         </h1>
                         <div class="hidden grid grid-cols-1 md:grid-cols-2 {% if is_manager %}lg:grid-cols-5{% else %}lg:grid-cols-4{% endif %} gap-3">
@@ -860,6 +860,21 @@
         let currentState = 'initial';
         let userAvatarUrl = null; // Cache for user avatar
         let currentThreadId = null; // Persist backend thread for flows
+        // Fetch user's first name for greeting
+        (async function () {
+            try {
+                const resp = await fetch('/api/odoo/employee/current');
+                const data = await resp.json();
+                const fullName = data && data.success && data.data && data.data.name ? String(data.data.name) : '';
+                const firstName = fullName.split(' ').filter(Boolean)[0] || '';
+                if (firstName) {
+                    const el = document.getElementById('greetingName');
+                    if (el) el.textContent = firstName;
+                }
+            } catch (e) {
+                // Keep default greeting on failure
+            }
+        })();
 
         // Smooth scroll to bottom function
         function scrollToBottom() {
