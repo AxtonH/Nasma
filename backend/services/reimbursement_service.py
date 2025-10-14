@@ -276,6 +276,20 @@ class ReimbursementService:
                 'state': 'draft'  # Start as draft
             }
 
+            # Ensure hr.expense.company_id matches the employee's company
+            try:
+                emp_company_val = employee_data.get('company_id')
+                emp_company_id = None
+                if isinstance(emp_company_val, (list, tuple)) and len(emp_company_val) > 0:
+                    emp_company_id = emp_company_val[0]
+                elif isinstance(emp_company_val, int):
+                    emp_company_id = emp_company_val
+                if emp_company_id:
+                    expense_values['company_id'] = emp_company_id
+            except Exception:
+                # If resolution fails, let Odoo enforce constraints
+                pass
+
             # Require a valid product_id to avoid creating with wrong category
             if not product_id:
                 return False, (
