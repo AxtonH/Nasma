@@ -252,12 +252,35 @@ class OdooService:
         client = getattr(self, 'http', requests)
         try:
             resp = client.post(url, json=json, cookies=cookies, timeout=timeout)
+            # Case 1: HTTP auth errors → renew and retry
             if resp.status_code in (401, 403):
                 # try renewal
                 ok, _ = self._renew_session()
                 if ok:
                     cookies = {'session_id': self.session_id} if self.session_id else {}
                     return client.post(url, json=json, cookies=cookies, timeout=timeout)
+            # Case 2: Odoo returns 200 with JSON error payload indicating session expiry
+            if resp.status_code == 200:
+                try:
+                    body = resp.json()
+                    err = body.get('error') if isinstance(body, dict) else None
+                    if isinstance(err, dict):
+                        name = str(err.get('data', {}).get('name') or err.get('name') or '').lower()
+                        msg = str(err.get('data', {}).get('message') or err.get('message') or '').lower()
+                        code = str(err.get('code') or '')
+                        session_expired = (
+                            'session expired' in msg or
+                            'sessionexpiredexception' in name or
+                            code == '100'
+                        )
+                        if session_expired:
+                            ok, _ = self._renew_session()
+                            if ok:
+                                cookies = {'session_id': self.session_id} if self.session_id else {}
+                                return client.post(url, json=json, cookies=cookies, timeout=timeout)
+                except Exception:
+                    # If parsing fails, fall through and return original response
+                    pass
             return resp
         except Exception:
             # best-effort retry after renewal

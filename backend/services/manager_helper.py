@@ -106,7 +106,12 @@ def _make_odoo_request(odoo_service, model: str, method: str, params: Dict) -> T
             "id": 1
         }
         cookies = {'session_id': odoo_service.session_id} if odoo_service.session_id else {}
-        resp = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, cookies=cookies, timeout=20)
+        # Use retry-aware post to handle session expiry automatically
+        post = getattr(odoo_service, 'post_with_retry', None)
+        if callable(post):
+            resp = post(url, json=payload, cookies=cookies, timeout=20)
+        else:
+            resp = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, cookies=cookies, timeout=20)
         if resp.status_code != 200:
             return False, f"HTTP error: {resp.status_code}"
         try:

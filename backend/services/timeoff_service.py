@@ -298,13 +298,18 @@ class TimeOffService:
             
             cookies = {'session_id': self.odoo_service.session_id} if self.odoo_service.session_id else {}
             
-            response = requests.post(
-                url,
-                json=data,
-                headers={'Content-Type': 'application/json'},
-                cookies=cookies,
-                timeout=15  # Increased from 3 to 15 seconds for leave types query
-            )
+            # Use OdooService retry-aware post to auto-renew expired sessions
+            post = getattr(self.odoo_service, 'post_with_retry', None)
+            if callable(post):
+                response = post(url, json=data, cookies=cookies, timeout=15)
+            else:
+                response = requests.post(
+                    url,
+                    json=data,
+                    headers={'Content-Type': 'application/json'},
+                    cookies=cookies,
+                    timeout=15
+                )
             
             if response.status_code == 200:
                 # Log response for debugging
