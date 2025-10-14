@@ -510,8 +510,8 @@ def build_overtime_table_widget(odoo_service, team: List[Dict], days_ahead: int 
                 rid = r.get('id')
                 approval_html = (
                     f"<div class=\"flex flex-col items-center\">"
-                    f"<button class=\"approval-button bg-green-600 text-white hover:bg-green-700 border-green-700\" onclick=\"window.__nsApprove('approval.request',{rid},this)\">Approve</button>"
-                    f"<button class=\"approval-button bg-red-600 text-white hover:bg-red-700 border-red-700 mt-1\" onclick=\"window.__nsRefuse('approval.request',{rid},this)\">Deny</button>"
+                    f"<button class=\"approval-button bg-green-600 text-white hover:bg-green-700 border-green-700\" data-action=\"approve\" data-model=\"approval.request\" data-id=\"{rid}\">Approve</button>"
+                    f"<button class=\"approval-button bg-red-600 text-white hover:bg-red-700 border-red-700 mt-1\" data-action=\"refuse\" data-model=\"approval.request\" data-id=\"{rid}\">Deny</button>"
                     f"</div>"
                 )
 
@@ -576,14 +576,14 @@ def build_team_overview_table_widget(overview: List[Dict]) -> Dict[str, Any]:
                         # Second approval: show single orange button that logs message
                         approval_html = (
                             "<div class=\"flex flex-col items-center\">"
-                            "<button class=\"approval-button bg-orange-500 text-white hover:bg-orange-600 border-orange-600\" onclick=\"window.__nsSecondApprovalNote(this)\">Second approval</button>"
+                            "<button class=\"approval-button bg-orange-500 text-white hover:bg-orange-600 border-orange-600\" data-action=\"note\" data-model=\"hr.leave\" data-id=\"{lid}\">Second approval</button>"
                             "</div>"
                         )
                     elif state == 'confirm':
                         approval_html = (
                             f"<div class=\"flex flex-col items-center\">"
-                            f"<button class=\"approval-button bg-green-600 text-white hover:bg-green-700 border-green-700\" onclick=\"window.__nsApprove('hr.leave',{lid},this)\">Approve</button>"
-                            f"<button class=\"approval-button bg-red-600 text-white hover:bg-red-700 border-red-700 mt-1\" onclick=\"window.__nsRefuse('hr.leave',{lid},this)\">Deny</button>"
+                            f"<button class=\"approval-button bg-green-600 text-white hover:bg-green-700 border-green-700\" data-action=\"approve\" data-model=\"hr.leave\" data-id=\"{lid}\">Approve</button>"
+                            f"<button class=\"approval-button bg-red-600 text-white hover:bg-red-700 border-red-700 mt-1\" data-action=\"refuse\" data-model=\"hr.leave\" data-id=\"{lid}\">Deny</button>"
                             f"</div>"
                         )
             except Exception:

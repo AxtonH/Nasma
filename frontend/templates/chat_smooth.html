@@ -2022,48 +2022,39 @@
             sendToBackend(message);
         }
 
-        // Global handlers for approval/refusal actions from table widgets
-        window.__nsApprove = async function(model, id, btn){
+        // Unified approval/refusal handler (works inside constrained iframes like Teams)
+        document.addEventListener('click', async function(ev){
             try {
-                if (btn) btn.disabled = true;
+                const el = ev.target;
+                if (!el || !el.classList || !el.classList.contains('approval-button')) return;
+                const action = el.getAttribute('data-action');
+                const model = el.getAttribute('data-model');
+                const idStr = el.getAttribute('data-id');
+                const id = idStr ? parseInt(idStr, 10) : NaN;
+                if (!action || !model || !Number.isInteger(id)) return;
+                if (action === 'note') { window.__nsSecondApprovalNote && window.__nsSecondApprovalNote(el); return; }
+                el.disabled = true;
                 const resp = await fetch('/api/odoo/approve', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model, id, action: 'approve' })
+                    body: JSON.stringify({ model, id, action })
                 });
                 const data = await resp.json();
-                if (!data.success){
-                    alert('Approve failed: ' + (data.message || 'Unknown error'));
-                } else if (btn) {
-                    btn.closest('td')?.insertAdjacentHTML('beforeend', '<div class="text-green-600 text-xs mt-1 text-center w-full">Approved</div>');
+                if (!data.success) {
+                    alert((action === 'approve' ? 'Approve' : 'Deny') + ' failed: ' + (data.message || 'Unknown error'));
+                } else {
+                    const td = el.closest('td');
+                    if (td) {
+                        if (action === 'approve') td.insertAdjacentHTML('beforeend', '<div class="text-green-600 text-xs mt-1 text-center w-full">Approved</div>');
+                        if (action === 'refuse') td.insertAdjacentHTML('beforeend', '<div class="text-red-600 text-xs mt-1 text-center w-full">Denied</div>');
+                    }
                 }
-            } catch(e){
-                alert('Approve error: ' + e);
+            } catch (e) {
+                alert('Action error: ' + e);
             } finally {
-                if (btn) btn.disabled = false;
+                try { ev.target.disabled = false; } catch(_) {}
             }
-        }
-
-        window.__nsRefuse = async function(model, id, btn){
-            try {
-                if (btn) btn.disabled = true;
-                const resp = await fetch('/api/odoo/approve', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model, id, action: 'refuse' })
-                });
-                const data = await resp.json();
-                if (!data.success){
-                    alert('Deny failed: ' + (data.message || 'Unknown error'));
-                } else if (btn) {
-                    btn.closest('td')?.insertAdjacentHTML('beforeend', '<div class="text-red-600 text-xs mt-1 text-center w-full">Denied</div>');
-                }
-            } catch(e){
-                alert('Deny error: ' + e);
-            } finally {
-                if (btn) btn.disabled = false;
-            }
-        }
+        }, true);
 
         // Second approval handler: just annotate the cell with a note
         window.__nsSecondApprovalNote = function(btn){
