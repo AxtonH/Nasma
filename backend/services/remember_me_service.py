@@ -175,11 +175,14 @@ class RememberMeService:
             return None
 
         # Update last used timestamp
+        now_iso = datetime.now().isoformat()
+        # Sliding expiration: extend expiry window on each successful verification
+        new_expires_iso = (datetime.now() + timedelta(days=30)).isoformat()
         cursor.execute('''
             UPDATE remember_me_tokens
-            SET last_used_at = ?
+            SET last_used_at = ?, expires_at = ?
             WHERE token_hash = ?
-        ''', (datetime.now().isoformat(), token_hash))
+        ''', (now_iso, new_expires_iso, token_hash))
 
         conn.commit()
         conn.close()
