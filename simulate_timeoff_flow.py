@@ -34,7 +34,7 @@ class StubTimeOffService(TimeOffService):
 
     def submit_leave_request(self, employee_id: int, leave_type_id: int,
                              start_date: str, end_date: str, description: str = None,
-                             extra_fields: dict = None):
+                             extra_fields: dict = None, supporting_attachments=None):
         # Simulate success; echo back inputs for verification
         return True, {
             'leave_id': 999,

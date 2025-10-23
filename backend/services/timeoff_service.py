@@ -221,7 +221,8 @@ class TimeOffService:
     
     def submit_leave_request(self, employee_id: int, leave_type_id: int,
                            start_date: str, end_date: str, description: str = None,
-                           extra_fields: Optional[Dict] = None) -> Tuple[bool, Any]:
+                           extra_fields: Optional[Dict] = None,
+                           supporting_attachments: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, Any]:
         """Submit a leave request to Odoo"""
         try:
             self._log(f"Starting leave request submission for employee {employee_id}", "bot_logic")
@@ -260,6 +261,46 @@ class TimeOffService:
             if success:
                 leave_id = data
                 self._log(f"Leave request created successfully with ID: {leave_id}", "bot_logic")
+
+                attachment_ids: List[int] = []
+                if supporting_attachments:
+                    for idx, attachment in enumerate(supporting_attachments):
+                        try:
+                            if not isinstance(attachment, dict):
+                                continue
+                            datas = attachment.get('data')
+                            if not datas:
+                                continue
+                            name = attachment.get('filename') or attachment.get('name') or f'supporting-document-{idx + 1}'
+                            mimetype = attachment.get('mimetype') or attachment.get('content_type') or 'application/octet-stream'
+                            attachment_payload = {
+                                'name': name,
+                                'datas': datas,
+                                'res_model': 'hr.leave',
+                                'res_id': leave_id,
+                                'type': 'binary',
+                                'mimetype': mimetype,
+                            }
+                            self._log(f"Uploading supporting document '{name}' for leave {leave_id}", "bot_logic")
+                            att_success, att_id = self._make_odoo_request('ir.attachment', 'create', {
+                                'args': [attachment_payload],
+                                'kwargs': {}
+                            })
+                            if att_success and isinstance(att_id, int):
+                                attachment_ids.append(att_id)
+                            else:
+                                self._log(f"Failed to create attachment for '{name}': {att_id}", "general")
+                        except Exception as attachment_error:
+                            self._log(f"Exception uploading attachment {idx}: {attachment_error}", "general")
+                    if attachment_ids:
+                        self._log(f"Linking {len(attachment_ids)} attachments to supported_attachment_ids", "bot_logic")
+                        link_args = {
+                            'args': [[leave_id], {'supported_attachment_ids': [(6, 0, attachment_ids)]}],
+                            'kwargs': {}
+                        }
+                        link_success, link_resp = self._make_odoo_request('hr.leave', 'write', link_args)
+                        if not link_success:
+                            self._log(f"Failed to link supporting attachments: {link_resp}", "general")
                 return True, {
                     'leave_id': leave_id,
                     'message': f"Leave request #{leave_id} submitted successfully and is pending approval."

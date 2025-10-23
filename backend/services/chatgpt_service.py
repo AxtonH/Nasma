@@ -6,6 +6,7 @@ except Exception:
     # Local run from backend/ directory
     from config.settings import Config
 from datetime import datetime
+from typing import List, Dict, Any
 
 def debug_log(message: str, category: str = "general"):
     """Conditional debug logging based on configuration"""
@@ -1126,6 +1127,10 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 self._reset_timeoff_sessions(thread_id, 'User restarted time-off flow during continuation')
                 return self._start_timeoff_session(message, thread_id, payload, employee_data)
 
+            # Require supporting document upload (if pending) before moving on
+            if self._is_supporting_doc_stage(session):
+                return self._handle_supporting_document_step(message, thread_id, session, employee_data)
+
             # Fast-path: confirmation keywords should move straight to submission when context exists
             confirmation_tokens = {'yes', 'y', 'confirm', 'submit', 'ok', 'sure'}
             if message_lower in confirmation_tokens:
@@ -1797,45 +1802,14 @@ Be thorough and informative while maintaining clarity and accuracy."""
                         pass
                     msg = "Custom Hours are limited to one day. Please pick a single date." if is_halfday_flow else "Sick Leave Custom Hours are limited to one day. Please pick a single date."
                     return self._create_response_with_datepicker_single(msg, thread_id)
-                self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
-                self.session_manager.advance_session_step(thread_id)
-                try:
-                    # Explicitly set step to 3 to avoid regressions
-                    self.session_manager.update_session(thread_id, {'step': 3})
-                except Exception:
-                    pass
-
-                # Resolve selected type using robust resolver
-                ctx_resolved = self._resolve_timeoff_context(session)
-                selected_type = ctx_resolved.get('selected_leave_type') or {}
-                resolved_employee = (
-                    employee_data
-                    or ctx_resolved.get('employee_data')
-                    or {}
+                return self._process_captured_dates(
+                    thread_id,
+                    session,
+                    employee_data,
+                    start_date,
+                    end_date,
+                    is_single_date_flow
                 )
-                self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type, start_date=start_date, end_date=end_date)
-
-                def dd_mm_yyyy(d: str) -> str:
-                    try:
-                        return _dt.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
-                    except Exception:
-                        return d
-                if is_single_date_flow:
-                    hour_text = (
-                        "Great, got your date. Please choose your hours (from/to)."
-                    )
-                    return self._create_response_with_hour_picker(hour_text, thread_id)
-                response_text = f"Great, noted your dates. Here's your time-off request summary:\n\n"
-                response_text += f"📋 **Leave Type:** {selected_type.get('name', 'Unknown') if selected_type else 'Unknown'}\n"
-                response_text += f"📅 **Start Date:** {dd_mm_yyyy(start_date)}\n"
-                response_text += f"📅 **End Date:** {dd_mm_yyyy(end_date)}\n"
-                response_text += f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
-                response_text += "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
-                buttons = [
-                    {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
-                    {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
-                ]
-                return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
         except Exception:
             pass
 
@@ -1847,110 +1821,26 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 msg = "For Half Days, you can only select one day. Please pick a single date." if is_halfday_flow else "For Sick Leave Custom Hours, you can only select one day. Please pick a single date."
                 return self._create_response_with_datepicker_single(msg, thread_id)
             # Validate chronological order (already ensured) and store
-            self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
-            self.session_manager.advance_session_step(thread_id)
-            try:
-                # Explicitly set step to 3 to avoid regressions
-                self.session_manager.update_session(thread_id, {'step': 3})
-            except Exception:
-                pass
-
-            session_data = session.get('data', {})
-            context_data = {}
-            if isinstance(session_data, dict):
-                context_data = session_data.get('timeoff_context', {}) or {}
-            selected_type = (
-                session_data.get('selected_leave_type')
-                or session.get('selected_leave_type', {})
-                or context_data.get('selected_leave_type')
-                or {}
+            return self._process_captured_dates(
+                thread_id,
+                session,
+                employee_data,
+                start_date,
+                end_date,
+                is_single_date_flow
             )
-            resolved_employee = (
-                employee_data
-                or session_data.get('employee_data')
-                or context_data.get('employee_data')
-                or session.get('employee_data')
-                or {}
-            )
-            self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type, start_date=start_date, end_date=end_date)
-
-            # Display dates as DD/MM/YYYY
-            def dd_mm_yyyy(d: str) -> str:
-                try:
-                    return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
-                except Exception:
-                    return d
-            if is_single_date_flow:
-                # After selecting the date for single-date flows (Half Days or Sick Custom Hours), ask for hour range
-                hour_text = (
-                    "Great, got your date. Please choose your hours (from/to)."
-                )
-                return self._create_response_with_hour_picker(hour_text, thread_id)
-            else:
-                response_text = f"Great, noted your dates. Here's your time-off request summary:\n\n"
-                response_text += f"📋 **Leave Type:** {selected_type.get('name', 'Unknown') if selected_type else 'Unknown'}\n"
-                response_text += f"📅 **Start Date:** {dd_mm_yyyy(start_date)}\n"
-                response_text += f"📅 **End Date:** {dd_mm_yyyy(end_date)}\n"
-                response_text += f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
-                response_text += "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
-                buttons = [
-                    {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
-                    {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
-                ]
-                return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
         else:
             # Holistic fallback: accept a single date and treat it as a same-day range
             single = self.timeoff_service.parse_date_input(message)
             if single:
-                self.session_manager.update_session(thread_id, {'start_date': single, 'end_date': single})
-                self.session_manager.advance_session_step(thread_id)
-                try:
-                    # Explicitly set step to 3 to avoid regressions
-                    self.session_manager.update_session(thread_id, {'step': 3})
-                except Exception:
-                    pass
-
-                session_data = session.get('data', {})
-                context_data = {}
-                if isinstance(session_data, dict):
-                    context_data = session_data.get('timeoff_context', {}) or {}
-                selected_type = (
-                    session_data.get('selected_leave_type')
-                    or session.get('selected_leave_type', {})
-                    or context_data.get('selected_leave_type')
-                    or {}
+                return self._process_captured_dates(
+                    thread_id,
+                    session,
+                    employee_data,
+                    single,
+                    single,
+                    is_single_date_flow
                 )
-                resolved_employee = (
-                    employee_data
-                    or session_data.get('employee_data')
-                    or context_data.get('employee_data')
-                    or session.get('employee_data')
-                    or {}
-                )
-                self._persist_timeoff_context(thread_id, session, selected_leave_type=selected_type, start_date=single, end_date=single)
-
-                def dd_mm_yyyy(d: str) -> str:
-                    try:
-                        return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
-                    except Exception:
-                        return d
-                if is_single_date_flow:
-                    hour_text = (
-                        "Great, got your date. Please choose your hours (from/to)."
-                    )
-                    return self._create_response_with_hour_picker(hour_text, thread_id)
-                else:
-                    response_text = f"Great, noted your date. Here's your time-off request summary:\n\n"
-                    response_text += f"📋 **Leave Type:** {selected_type.get('name', 'Unknown') if selected_type else 'Unknown'}\n"
-                    response_text += f"📅 **Start Date:** {dd_mm_yyyy(single)}\n"
-                    response_text += f"📅 **End Date:** {dd_mm_yyyy(single)}\n"
-                    response_text += f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
-                    response_text += "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
-                    buttons = [
-                        {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
-                        {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
-                    ]
-                    return self._create_response_with_choice_buttons(response_text, thread_id, buttons)
 
             response_text = (
                 "I couldn't parse the date range. Please send both dates in one message. Examples:\n"
@@ -2203,6 +2093,34 @@ Be thorough and informative while maintaining clarity and accuracy."""
                     except Exception:
                         pass
                     
+                    updated_session = session
+                    try:
+                        latest = self.session_manager.get_session(thread_id)
+                        if latest:
+                            updated_session = latest
+                    except Exception:
+                        pass
+
+                    if self._requires_supporting_document(updated_session) and not self._has_supporting_document(updated_session):
+                        try:
+                            data_payload = dict(updated_session.get('data', {}) or {})
+                            ctx_payload = dict((data_payload.get('timeoff_context') or {}))
+                            ctx_payload.update({
+                                'supporting_doc_required': True,
+                                'supporting_doc_uploaded': False
+                            })
+                            data_payload['timeoff_context'] = ctx_payload
+                            data_payload['supporting_doc_required'] = True
+                            data_payload['supporting_doc_uploaded'] = False
+                            self.session_manager.update_session(thread_id, {
+                                'supporting_doc_required': True,
+                                'supporting_doc_uploaded': False,
+                                'data': data_payload
+                            })
+                        except Exception:
+                            pass
+                        return self._prompt_supporting_document_upload(thread_id)
+                    
                     response_text = f"Great, noted your hours. Here's your time-off request summary:\n\n"
                     response_text += f"📋 **Leave Type:** {leave_type_name}\n"
                     response_text += f"📅 **Date:** {dd_mm_yyyy(start_date)}\n"
@@ -2345,6 +2263,16 @@ Be thorough and informative while maintaining clarity and accuracy."""
             
             # Support Half Day custom hours and Sick Leave Custom Hours via modular service and hour range fields
             extra_fields = {}
+            supporting_documents = self._collect_supporting_documents(session)
+
+            if self._requires_supporting_document(session) and not supporting_documents:
+                debug_log("Supporting document required but not available; prompting upload.", "bot_logic")
+                reminder_response = self._prompt_supporting_document_upload(thread_id)
+                reminder_response['message'] = (
+                    "I still need your supporting document before I can submit this Sick Leave request. "
+                    "Please upload it using the button above."
+                )
+                return reminder_response
             
             # Check if this is Sick Leave Custom Hours mode
             is_sick_custom = False
@@ -2407,13 +2335,27 @@ Be thorough and informative while maintaining clarity and accuracy."""
                 if ht is not None:
                     extra_fields['request_hour_to'] = ht
 
+            attachment_payloads: List[Dict[str, Any]] = []
+            for doc in supporting_documents:
+                if not isinstance(doc, dict):
+                    continue
+                datas = doc.get('data')
+                if not datas:
+                    continue
+                attachment_payloads.append({
+                    'filename': doc.get('filename') or doc.get('name'),
+                    'mimetype': doc.get('mimetype') or doc.get('content_type'),
+                    'data': datas
+                })
+
             success, result = self.timeoff_service.submit_leave_request(
                 employee_id=employee_id,
                 leave_type_id=leave_type_id,
                 start_date=start_date,
                 end_date=end_date,
                 description=f"Time off request submitted via Nasma chatbot",
-                extra_fields=extra_fields or None
+                extra_fields=extra_fields or None,
+                supporting_attachments=attachment_payloads or None
             )
             
             if success:
@@ -2531,6 +2473,291 @@ Be thorough and informative while maintaining clarity and accuracy."""
             {'text': 'Custom Hours', 'value': 'SICK_CUSTOM_HOURS', 'type': 'sick_leave_mode'}
         ]
         return self._create_response_with_choice_buttons(text, thread_id, buttons)
+
+    def _requires_supporting_document(self, session: dict) -> bool:
+        """Return True when current selection requires a supporting document upload."""
+        try:
+            session_data = session.get('data', {}) if isinstance(session, dict) else {}
+            ctx = {}
+            if isinstance(session_data, dict):
+                ctx = session_data.get('timeoff_context', {}) or {}
+            selected = (
+                ctx.get('selected_leave_type')
+                or session_data.get('selected_leave_type')
+                or session.get('selected_leave_type')
+                or {}
+            )
+            name = (selected.get('name') or '').strip().lower()
+            if name != 'sick leave':
+                return False
+            mode = (
+                ctx.get('sick_leave_mode')
+                or session_data.get('sick_leave_mode')
+                or session.get('sick_leave_mode')
+            )
+            if isinstance(mode, str):
+                mode = mode.strip().lower()
+            return mode in {
+                'full_days', 'full day', 'fulldays', 'full-days',
+                'custom_hours', 'custom hour', 'custom-hours'
+            }
+        except Exception:
+            return False
+
+    def _collect_supporting_documents(self, session: dict) -> List[dict]:
+        """Return supporting documents (if any) stored in the session."""
+        try:
+            session_data = session.get('data', {}) if isinstance(session, dict) else {}
+            docs = session_data.get('supporting_documents')
+            if docs:
+                return docs if isinstance(docs, list) else []
+            docs = session.get('supporting_documents')
+            if docs and isinstance(docs, list):
+                return docs
+            ctx = session_data.get('timeoff_context', {}) if isinstance(session_data, dict) else {}
+            docs = ctx.get('supporting_documents')
+            return docs if isinstance(docs, list) else []
+        except Exception:
+            return []
+
+    def _has_supporting_document(self, session: dict) -> bool:
+        """Check whether the session already has an uploaded supporting document."""
+        docs = self._collect_supporting_documents(session)
+        return any(isinstance(doc, dict) and doc.get('data') for doc in docs)
+
+    def _is_supporting_doc_stage(self, session: dict) -> bool:
+        """Determine if we are waiting for a supporting document upload."""
+        try:
+            session_data = session.get('data', {}) if isinstance(session, dict) else {}
+            required = (
+                session_data.get('supporting_doc_required')
+                if isinstance(session_data, dict) else False
+            )
+            uploaded = (
+                session_data.get('supporting_doc_uploaded')
+                if isinstance(session_data, dict) else False
+            )
+            if not required:
+                required = session.get('supporting_doc_required', False)
+            if not uploaded:
+                uploaded = session.get('supporting_doc_uploaded', False)
+            return bool(required) and not bool(uploaded)
+        except Exception:
+            return False
+
+    def _prompt_supporting_document_upload(self, thread_id: str) -> dict:
+        """Create a response requesting the supporting document upload widget."""
+        message_text = (
+            "Sick Leave full days require a medical certificate or supporting document. "
+            "Please upload the document now so I can submit your request."
+        )
+        if not thread_id:
+            import time
+            thread_id = f"timeoff_{int(time.time())}"
+        return {
+            'message': message_text,
+            'thread_id': thread_id,
+            'source': self.model,
+            'confidence_score': 1.0,
+            'model_used': self.model,
+            'session_handled': True,
+            'widgets': {
+                'supporting_document_upload': {
+                    'context_key': 'timeoff_support_document',
+                    'accept': '.pdf,.jpg,.jpeg,.png,.heic,.doc,.docx',
+                    'max_files': 1
+                }
+            }
+        }
+
+    def _handle_supporting_document_step(self, message: str, thread_id: str, session: dict, employee_data: dict) -> dict:
+        """Handle the supporting document upload step before confirmation."""
+        message_lower = (message or '').strip().lower()
+        import re as _re_support
+        message_clean = _re_support.sub(r'[^\w\s]', '', message_lower)
+        cancel_tokens = {'cancel', 'abort', 'stop', 'exit', 'quit', 'no', 'n', 'nevermind', 'undo', 'end'}
+        if message_lower in cancel_tokens or message_clean in cancel_tokens:
+            try:
+                self.session_manager.cancel_session(thread_id, 'User cancelled during supporting document step')
+            finally:
+                self._reset_timeoff_flow_state(thread_id)
+            return self._create_response('request cancelled, can i help you with anything else', thread_id)
+
+        # Allow restart commands mid-step
+        if self._is_timeoff_start_message(message):
+            return self._restart_timeoff_flow(message, thread_id, employee_data, 'User restarted during supporting document step')
+
+        # Accept explicit acknowledgement tokens after upload
+        acknowledgement_tokens = {
+            'supporting_document_uploaded',
+            'supporting document uploaded',
+            'document uploaded',
+            'uploaded',
+            'done',
+            'finished'
+        }
+        session_refreshed = session
+        try:
+            refreshed = self.session_manager.get_session(thread_id)
+            if refreshed:
+                session_refreshed = refreshed
+        except Exception:
+            pass
+
+        has_doc = self._has_supporting_document(session_refreshed)
+        if message_lower in acknowledgement_tokens or message_clean in acknowledgement_tokens:
+            if not has_doc:
+                reminder = (
+                    "I still don't see a document attached. Please use the upload button above to share your medical certificate."
+                )
+                return self._prompt_supporting_document_upload(thread_id) | {'message': reminder}
+
+            # Mark the supporting document as uploaded and proceed to confirmation
+            try:
+                current_step = session_refreshed.get('step', 2)
+                updates = {
+                    'supporting_doc_uploaded': True,
+                }
+                self.session_manager.update_session(thread_id, updates)
+                # Store in data for convenience
+                data_payload = session_refreshed.get('data', {}) or {}
+                ctx_payload = dict((data_payload.get('timeoff_context') or {}))
+                ctx_payload.update({
+                    'supporting_doc_uploaded': True,
+                    'supporting_doc_required': True,
+                })
+                data_payload.update({
+                    'supporting_doc_uploaded': True,
+                    'supporting_doc_required': True,
+                    'timeoff_context': ctx_payload
+                })
+                self.session_manager.update_session(thread_id, {'data': data_payload})
+                # Advance to the confirmation step now that docs are ready
+                if current_step <= 2:
+                    self.session_manager.advance_session_step(thread_id)
+            except Exception:
+                pass
+
+            # Build the confirmation summary (same as after dates)
+            ctx = self._resolve_timeoff_context(session_refreshed)
+            selected_type = ctx.get('selected_leave_type') or session_refreshed.get('selected_leave_type') or {}
+            start_date = ctx.get('start_date') or session_refreshed.get('start_date')
+            end_date = ctx.get('end_date') or session_refreshed.get('end_date')
+            resolved_employee = (
+                employee_data
+                or ctx.get('employee_data')
+                or session_refreshed.get('employee_data')
+                or {}
+            )
+
+            def dd_mm_yyyy(d: str) -> str:
+                try:
+                    return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+                except Exception:
+                    return d
+
+            docs = self._collect_supporting_documents(session_refreshed)
+            doc_name = ''
+            if docs:
+                first_doc = docs[0]
+                doc_name = first_doc.get('filename') or first_doc.get('name') or 'Supporting document'
+
+            summary = "Great, I have everything I need. Here's your time-off request summary:\n\n"
+            summary += f"📋 **Leave Type:** {selected_type.get('name', 'Unknown') if isinstance(selected_type, dict) else 'Unknown'}\n"
+            summary += f"📅 **Start Date:** {dd_mm_yyyy(start_date) if start_date else 'Unknown'}\n"
+            summary += f"📅 **End Date:** {dd_mm_yyyy(end_date) if end_date else 'Unknown'}\n"
+            summary += f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n"
+            if doc_name:
+                summary += f"📎 **Supporting Document:** {doc_name}\n"
+            summary += "\nDo you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
+            buttons = [
+                {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
+                {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
+            ]
+            return self._create_response_with_choice_buttons(summary, thread_id, buttons)
+
+        # Any other message should re-prompt the upload instructions
+        reminder = (
+            "Please upload your supporting document using the button above. "
+            "Once it's uploaded, click the Upload button and I'll continue."
+        )
+        return self._prompt_supporting_document_upload(thread_id) | {'message': reminder}
+
+    def _process_captured_dates(self, thread_id: str, session: dict, employee_data: dict,
+                                start_date: str, end_date: str, is_single_date_flow: bool) -> dict:
+        """Store captured dates then branch to supporting document prompt or confirmation summary."""
+        self.session_manager.update_session(thread_id, {'start_date': start_date, 'end_date': end_date})
+        self._persist_timeoff_context(thread_id, session, start_date=start_date, end_date=end_date)
+
+        refreshed_session = session
+        try:
+            latest = self.session_manager.get_session(thread_id)
+            if latest:
+                refreshed_session = latest
+        except Exception:
+            pass
+
+        if self._requires_supporting_document(refreshed_session) and not is_single_date_flow:
+            try:
+                data_payload = dict(refreshed_session.get('data', {}) or {})
+                ctx = dict(data_payload.get('timeoff_context', {}) or {})
+                ctx.update({
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'supporting_doc_required': True,
+                })
+                data_payload['timeoff_context'] = ctx
+                data_payload['supporting_doc_required'] = True
+                data_payload['supporting_doc_uploaded'] = False
+                updates = {
+                    'supporting_doc_required': True,
+                    'supporting_doc_uploaded': False,
+                    'data': data_payload
+                }
+                self.session_manager.update_session(thread_id, updates)
+            except Exception:
+                pass
+            return self._prompt_supporting_document_upload(thread_id)
+
+        # No supporting document requirement; proceed normally
+        self.session_manager.advance_session_step(thread_id)
+        try:
+            self.session_manager.update_session(thread_id, {'step': 3})
+        except Exception:
+            pass
+
+        ctx = self._resolve_timeoff_context(refreshed_session)
+        selected_type = ctx.get('selected_leave_type') or refreshed_session.get('selected_leave_type') or {}
+        resolved_employee = (
+            employee_data
+            or ctx.get('employee_data')
+            or refreshed_session.get('employee_data')
+            or {}
+        )
+
+        if is_single_date_flow:
+            return self._create_response_with_hour_picker(
+                "Great, got your date. Please choose your hours (from/to).",
+                thread_id
+            )
+
+        def dd_mm_yyyy(d: str) -> str:
+            try:
+                return datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')
+            except Exception:
+                return d
+
+        summary = "Great, noted your dates. Here's your time-off request summary:\n\n"
+        summary += f"📋 **Leave Type:** {selected_type.get('name', 'Unknown') if isinstance(selected_type, dict) else 'Unknown'}\n"
+        summary += f"📅 **Start Date:** {dd_mm_yyyy(start_date)}\n"
+        summary += f"📅 **End Date:** {dd_mm_yyyy(end_date)}\n"
+        summary += f"👤 **Employee:** {resolved_employee.get('name', 'Unknown')}\n\n"
+        summary += "Do you want to submit this request? reply or click 'yes' to confirm or 'no' to cancel"
+        buttons = [
+            {'text': 'Yes', 'value': 'yes', 'type': 'confirmation_choice'},
+            {'text': 'No', 'value': 'no', 'type': 'confirmation_choice'}
+        ]
+        return self._create_response_with_choice_buttons(summary, thread_id, buttons)
 
     def _create_response_with_datepicker(self, message_text: str, thread_id: str) -> dict:
         """Create a response object that instructs the UI to show a date range picker widget"""

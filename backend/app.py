@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for, send_from_directory
 from flask_cors import CORS
+import base64
+from datetime import datetime, timezone
 try:
     # Production import style when running as package 'backend.app'
     from .services.chatgpt_service import ChatGPTService
@@ -1753,6 +1755,72 @@ def create_app():
                 'success': True,
                 'rows': rows,
                 'confirmation_text': confirmation_message(rows)
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'message': str(e)}), 500
+
+    @app.route('/api/timeoff/supporting-document', methods=['POST'])
+    def upload_timeoff_supporting_document():
+        try:
+            if not session.get('authenticated'):
+                return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+            if 'file' not in request.files:
+                return jsonify({'success': False, 'message': 'No file uploaded'}), 400
+
+            thread_id = request.form.get('thread_id') or request.args.get('thread_id')
+            if not thread_id:
+                return jsonify({'success': False, 'message': 'Missing thread_id'}), 400
+
+            active_session = session_manager.get_session(thread_id)
+            if not active_session or active_session.get('type') != 'timeoff':
+                return jsonify({'success': False, 'message': 'No active time-off session found'}), 404
+
+            file_storage = request.files['file']
+            content = file_storage.read()
+            if not content:
+                return jsonify({'success': False, 'message': 'Uploaded file is empty'}), 400
+
+            encoded = base64.b64encode(content).decode('utf-8')
+            doc_entry = {
+                'filename': file_storage.filename,
+                'mimetype': file_storage.mimetype or 'application/octet-stream',
+                'data': encoded,
+                'uploaded_at': datetime.now(timezone.utc).isoformat()
+            }
+
+            data_block = dict(active_session.get('data', {}) or {})
+            existing_docs = list(data_block.get('supporting_documents') or [])
+            existing_docs.append(doc_entry)
+            data_block['supporting_documents'] = existing_docs
+
+            context_block = dict(data_block.get('timeoff_context', {}) or {})
+            sanitized_docs = []
+            for doc in existing_docs:
+                sanitized_docs.append({
+                    'filename': doc.get('filename'),
+                    'mimetype': doc.get('mimetype'),
+                    'uploaded_at': doc.get('uploaded_at')
+                })
+            context_block['supporting_documents'] = sanitized_docs
+            context_block['supporting_doc_required'] = True
+            context_block['supporting_doc_uploaded'] = False
+            data_block['timeoff_context'] = context_block
+            data_block['supporting_doc_required'] = True
+            data_block['supporting_doc_uploaded'] = False
+
+            session_manager.update_session(thread_id, {
+                'data': data_block,
+                'supporting_documents': existing_docs,
+                'supporting_doc_required': True,
+                'supporting_doc_uploaded': False
+            })
+
+            return jsonify({
+                'success': True,
+                'filename': file_storage.filename,
+                'mimetype': file_storage.mimetype,
+                'uploaded_at': doc_entry['uploaded_at']
             })
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
